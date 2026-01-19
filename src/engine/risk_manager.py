@@ -52,7 +52,7 @@ class RiskManager:
     def can_open_position(
         self,
         signal: Signal,
-        current_positions: int,
+        current_positions: List,
         account_value: float,
         starting_balance: float
     ) -> Tuple[bool, str]:
@@ -61,20 +61,25 @@ class RiskManager:
 
         Args:
             signal: Trading signal
-            current_positions: Number of currently open positions
+            current_positions: List of currently open positions
             account_value: Current account value
             starting_balance: Starting balance for the day
 
         Returns:
             Tuple of (allowed, reason)
         """
+        # Check if we already have a position for this pair
+        for pos in current_positions:
+            if pos.pair == signal.pair:
+                return False, f"Already have open position for {signal.pair}"
+
         # Check daily loss limit
         daily_pnl_pct = ((account_value - starting_balance) / starting_balance) * 100
         if daily_pnl_pct <= -self.max_daily_loss_pct * 100:
             return False, f"Daily loss limit reached ({daily_pnl_pct:.2f}%)"
 
         # Check max open positions
-        if current_positions >= self.max_open_positions:
+        if len(current_positions) >= self.max_open_positions:
             return False, f"Max open positions ({self.max_open_positions}) reached"
 
         # Check if signal is actionable

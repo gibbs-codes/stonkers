@@ -6,6 +6,7 @@ from src.config.settings import config
 from src.connectors import create_connector
 from src.data.fetcher import DataFetcher
 from src.data.storage import Database
+from src.data.models import Direction
 from src.strategies.registry import StrategyRegistry
 from src.engine.paper_trader import PaperTrader
 from src.engine.risk_manager import RiskManager
@@ -137,7 +138,12 @@ class TradingBot:
 
                         if signal:
                             self.logger.log_signal(signal)
-                            await self._process_signal(signal, current_prices[pair])
+
+                            # Handle NEUTRAL signals (exit signals) differently
+                            if signal.direction == Direction.NEUTRAL:
+                                await self._process_exit_signal(signal, current_prices[pair])
+                            else:
+                                await self._process_signal(signal, current_prices[pair])
 
                 # Log portfolio status every 10 iterations
                 if iteration % 10 == 0:
@@ -177,7 +183,7 @@ class TradingBot:
 
         can_open, reason = self.risk_manager.can_open_position(
             signal=signal,
-            current_positions=self.paper_trader.position_count,
+            current_positions=self.paper_trader.get_open_positions(),
             account_value=portfolio_value,
             starting_balance=self.paper_trader.starting_balance
         )
@@ -203,6 +209,35 @@ class TradingBot:
             f"Risk checks passed, position size: {quantity:.6f}",
             quantity=quantity
         )
+
+    async def _process_exit_signal(self, signal, current_price: float):
+        """
+        Process a NEUTRAL (exit) signal.
+
+        Args:
+            signal: Exit signal
+            current_price: Current market price
+        """
+        # Check if we have an open position for this pair
+        position = None
+        for pos in self.paper_trader.get_open_positions():
+            if pos.pair == signal.pair:
+                position = pos
+                break
+
+        if not position:
+            # No position to close, ignore exit signal
+            return
+
+        # Close the position
+        trade = self.paper_trader.close_position(
+            position.id,
+            current_price,
+            f"Strategy exit: {signal.reasoning}"
+        )
+
+        if trade:
+            self.logger.log_trade_completed(trade)
 
     async def _check_position_exits(self, current_prices: Dict[str, float]):
         """
