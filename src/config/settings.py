@@ -1,119 +1,132 @@
-"""Configuration management system."""
+"""Configuration loader for the trading bot."""
 import os
+from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict
+from typing import List
+
 import yaml
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 
-class Config:
-    """Global configuration manager."""
+@dataclass
+class ExchangeConfig:
+    """Exchange connection settings."""
+    name: str
+    paper: bool
+    api_key: str
+    secret_key: str
 
-    def __init__(self, config_path: str = None):
-        """
-        Load configuration from YAML file.
+
+@dataclass
+class TradingConfig:
+    """Trading pair and timeframe settings."""
+    pairs: List[str]
+    default_timeframe: str
+
+
+@dataclass
+class PaperTradingConfig:
+    """Paper trading settings."""
+    enabled: bool
+    starting_balance: Decimal
+    slippage_pct: Decimal  # Simulated slippage percentage
+
+
+@dataclass
+class RiskConfig:
+    """Risk management settings."""
+    max_position_pct: Decimal
+    max_daily_loss_pct: Decimal
+    max_open_positions: int
+    stop_loss_pct: Decimal
+    take_profit_pct: Decimal
+
+
+@dataclass
+class LoggingConfig:
+    """Logging settings."""
+    level: str
+    log_signals: bool
+    log_decisions: bool
+    log_to_file: bool
+
+
+@dataclass
+class Config:
+    """Main configuration container."""
+    exchange: ExchangeConfig
+    trading: TradingConfig
+    paper_trading: PaperTradingConfig
+    risk: RiskConfig
+    logging: LoggingConfig
+
+    @classmethod
+    def from_yaml(cls, config_path: Path = Path("config.yaml")) -> "Config":
+        """Load configuration from YAML file.
 
         Args:
-            config_path: Path to config file. If None, uses default_config.yaml
+            config_path: Path to config YAML file
+
+        Returns:
+            Config instance
         """
-        if config_path is None:
-            config_dir = Path(__file__).parent
-            config_path = config_dir / "default_config.yaml"
+        # Load YAML
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
 
-        with open(config_path, 'r') as f:
-            self._config = yaml.safe_load(f)
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
 
-        # Load sensitive data from environment
-        self._load_secrets()
+        # Parse exchange config
+        exchange_data = data.get("exchange", {})
+        exchange = ExchangeConfig(
+            name=exchange_data.get("name", "alpaca"),
+            paper=exchange_data.get("paper", True),
+            api_key=os.getenv("ALPACA_API_KEY", ""),
+            secret_key=os.getenv("ALPACA_SECRET_KEY", ""),
+        )
 
-    def _load_secrets(self):
-        """Load API keys and secrets from environment variables."""
-        exchange_name = self._config['exchange']['name'].lower()
+        # Parse trading config
+        trading_data = data.get("trading", {})
+        trading = TradingConfig(
+            pairs=trading_data.get("pairs", ["BTC/USD"]),
+            default_timeframe=trading_data.get("default_timeframe", "15m"),
+        )
 
-        # Exchange-specific environment variable mapping
-        if exchange_name == 'alpaca':
-            api_key = os.getenv('ALPACA_API_KEY')
-            api_secret = os.getenv('ALPACA_SECRET_KEY')
-        elif exchange_name == 'binance':
-            # Legacy Binance support
-            testnet = self._config['exchange'].get('testnet', True)
-            if testnet:
-                api_key = os.getenv('BINANCE_TESTNET_API_KEY')
-                api_secret = os.getenv('BINANCE_TESTNET_SECRET')
-            else:
-                api_key = os.getenv('BINANCE_API_KEY')
-                api_secret = os.getenv('BINANCE_SECRET')
-        else:
-            # Generic fallback - exchange name in uppercase
-            prefix = exchange_name.upper()
-            api_key = os.getenv(f'{prefix}_API_KEY')
-            api_secret = os.getenv(f'{prefix}_SECRET_KEY')
+        # Parse paper trading config
+        paper_data = data.get("paper_trading", {})
+        paper_trading = PaperTradingConfig(
+            enabled=paper_data.get("enabled", True),
+            starting_balance=Decimal(str(paper_data.get("starting_balance", 10000))),
+            slippage_pct=Decimal(str(paper_data.get("slippage_pct", 0.001))),  # 0.1% default
+        )
 
-        self._config['exchange']['api_key'] = api_key
-        self._config['exchange']['api_secret'] = api_secret
+        # Parse risk config
+        risk_data = data.get("risk", {})
+        risk = RiskConfig(
+            max_position_pct=Decimal(str(risk_data.get("max_position_pct", 0.2))),
+            max_daily_loss_pct=Decimal(str(risk_data.get("max_daily_loss_pct", 0.05))),
+            max_open_positions=risk_data.get("max_open_positions", 5),
+            stop_loss_pct=Decimal(str(risk_data.get("stop_loss_pct", 0.02))),
+            take_profit_pct=Decimal(str(risk_data.get("take_profit_pct", 0.05))),
+        )
 
-    def get(self, key_path: str, default=None) -> Any:
-        """
-        Get config value using dot notation.
+        # Parse logging config
+        logging_data = data.get("logging", {})
+        logging_config = LoggingConfig(
+            level=logging_data.get("level", "INFO"),
+            log_signals=logging_data.get("log_signals", True),
+            log_decisions=logging_data.get("log_decisions", True),
+            log_to_file=logging_data.get("log_to_file", True),
+        )
 
-        Example:
-            config.get('exchange.name') -> 'binance'
-            config.get('risk.max_position_pct') -> 0.1
-        """
-        keys = key_path.split('.')
-        value = self._config
-
-        for key in keys:
-            if isinstance(value, dict) and key in value:
-                value = value[key]
-            else:
-                return default
-
-        return value
-
-    def get_strategy_config(self, strategy_name: str) -> Dict[str, Any]:
-        """Get configuration for a specific strategy."""
-        strategies = self._config.get('strategies', {})
-        return strategies.get(strategy_name, {})
-
-    def is_strategy_enabled(self, strategy_name: str) -> bool:
-        """Check if a strategy is enabled."""
-        strategy_config = self.get_strategy_config(strategy_name)
-        return strategy_config.get('enabled', False)
-
-    def get_enabled_strategies(self) -> Dict[str, Dict[str, Any]]:
-        """Get all enabled strategies and their configs."""
-        strategies = self._config.get('strategies', {})
-        return {
-            name: config
-            for name, config in strategies.items()
-            if config.get('enabled', False)
-        }
-
-    @property
-    def exchange_name(self) -> str:
-        return self.get('exchange.name')
-
-    @property
-    def is_testnet(self) -> bool:
-        """For backward compatibility - maps to paper_trading for most exchanges."""
-        return self.get('exchange.testnet') or self.get('exchange.paper_trading', True)
-
-    @property
-    def is_paper_trading(self) -> bool:
-        return self.get('paper_trading.enabled', True)
-
-    @property
-    def trading_pairs(self) -> list:
-        return self.get('trading.pairs', [])
-
-    @property
-    def default_timeframe(self) -> str:
-        return self.get('trading.default_timeframe', '15m')
-
-
-# Global config instance
-config = Config()
+        return cls(
+            exchange=exchange,
+            trading=trading,
+            paper_trading=paper_trading,
+            risk=risk,
+            logging=logging_config,
+        )

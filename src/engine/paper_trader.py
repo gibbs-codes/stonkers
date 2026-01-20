@@ -1,238 +1,146 @@
-"""Paper trading engine for simulating trades."""
+"""Paper trader - executes simulated trades."""
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Optional
 import uuid
-from datetime import datetime
-from typing import Optional, List, Dict
-from src.data.models import Signal, Trade, Position, Direction
-from src.data.storage import Database
-from src.config.settings import config
+
+from src.data.database import Database
+from src.models.position import Direction, Position, PositionStatus
+from src.models.signal import Signal, SignalType
 
 
 class PaperTrader:
-    """Paper trading execution engine."""
+    """Executes paper trades (simulation only).
 
-    def __init__(self, db: Database):
-        """
-        Initialize paper trader.
+    No real money involved - just updates database with simulated trades.
+    """
+
+    def __init__(self, db: Database, initial_balance: Decimal = Decimal("10000")):
+        """Initialize paper trader.
 
         Args:
-            db: Database instance for persistence
+            db: Database instance
+            initial_balance: Starting cash balance
         """
         self.db = db
-        self.slippage_pct = 0.001  # 0.1% slippage
-        self.commission_pct = 0.001  # 0.1% commission per trade
+        self.initial_balance = initial_balance
+        self._initialize_account()
 
-        # Load or initialize state
-        saved_balance, saved_starting = db.load_paper_trading_state()
-        if saved_balance is not None:
-            self.balance = saved_balance
-            self.starting_balance = saved_starting
-        else:
-            self.starting_balance = config.get('paper_trading.starting_balance', 10000)
-            self.balance = self.starting_balance
-            self._save_state()
+    def _initialize_account(self) -> None:
+        """Initialize account state in database if not exists."""
+        state = self.db.get_account_state()
+        if not state:
+            # First time - set initial balance
+            self.db.save_account_state(
+                cash=self.initial_balance,
+                equity=self.initial_balance,
+            )
 
-        # Load open positions
-        self.positions: Dict[str, Position] = {}
-        for pos in db.get_open_positions():
-            self.positions[pos.id] = pos
+    def get_account_value(self) -> Decimal:
+        """Get current account equity.
 
-    def _save_state(self):
-        """Save current state to database."""
-        self.db.save_paper_trading_state(self.balance, self.starting_balance)
+        Returns:
+            Current equity value
+        """
+        state = self.db.get_account_state()
+        return state["equity"] if state else self.initial_balance
 
-    def execute_signal(
+    def get_cash_balance(self) -> Decimal:
+        """Get current cash balance.
+
+        Returns:
+            Current cash balance
+        """
+        state = self.db.get_account_state()
+        return state["cash"] if state else self.initial_balance
+
+    def execute_entry(
         self,
         signal: Signal,
-        quantity: float,
-        current_price: float
-    ) -> Optional[Trade]:
-        """
-        Execute a signal by opening a position.
+        entry_price: Decimal,
+        quantity: Decimal,
+    ) -> Position:
+        """Execute entry order (open new position).
 
         Args:
             signal: Trading signal
-            quantity: Position size (in base currency)
-            current_price: Current market price
+            entry_price: Price to enter at
+            quantity: Quantity to trade
 
         Returns:
-            None (position opened, not a completed trade yet)
+            Newly opened position
         """
-        if not signal.is_actionable:
-            return None
-
-        # Check if we already have a position for this pair
-        existing_position = self._get_position_for_pair(signal.pair)
-        if existing_position:
-            # Don't open another position for same pair
-            return None
-
-        # Calculate entry price with slippage
-        if signal.direction == Direction.LONG:
-            entry_price = current_price * (1 + self.slippage_pct)
-        else:  # SHORT
-            entry_price = current_price * (1 - self.slippage_pct)
-
-        # Calculate position value
-        position_value = quantity * entry_price
-        commission = position_value * self.commission_pct
-
-        # Check if we have enough balance
-        total_cost = position_value + commission
-        if total_cost > self.balance:
-            return None
-
-        # Deduct from balance
-        self.balance -= total_cost
+        # Determine direction from signal type
+        if signal.signal_type == SignalType.ENTRY_LONG:
+            direction = Direction.LONG
+        elif signal.signal_type == SignalType.ENTRY_SHORT:
+            direction = Direction.SHORT
+        else:
+            raise ValueError(f"Invalid signal type for entry: {signal.signal_type}")
 
         # Create position
         position = Position(
-            id=str(uuid.uuid4()),
+            id=f"pos_{uuid.uuid4().hex[:8]}",
             pair=signal.pair,
-            direction=signal.direction,
+            direction=direction,
             entry_price=entry_price,
             quantity=quantity,
-            entry_timestamp=signal.timestamp,
-            strategy_name=signal.strategy_name
+            entry_time=datetime.now(timezone.utc),  # Actual trade time, not signal time!
+            strategy_name=signal.strategy_name,
+            status=PositionStatus.OPEN,
         )
 
-        # Store position
-        self.positions[position.id] = position
-        self.db.store_position(position)
-        self._save_state()
+        # Update cash (deduct position value)
+        position_value = entry_price * quantity
+        cash = self.get_cash_balance()
+        new_cash = cash - position_value
 
-        return None  # Position opened, not a completed trade
+        if new_cash < 0:
+            raise ValueError(
+                f"Insufficient cash: have ${cash}, need ${position_value}"
+            )
 
-    def close_position(
+        self.db.save_account_state(cash=new_cash, equity=self.get_account_value())
+
+        return position
+
+    def execute_exit(
         self,
-        position_id: str,
-        current_price: float,
-        reason: str = ""
-    ) -> Optional[Trade]:
-        """
-        Close a position and record the trade.
+        position: Position,
+        exit_price: Decimal,
+    ) -> Position:
+        """Execute exit order (close position).
 
         Args:
-            position_id: Position ID
-            current_price: Current market price
-            reason: Reason for closing
+            position: Position to close
+            exit_price: Price to exit at
 
         Returns:
-            Trade object
+            Closed position with P&L calculated
         """
-        if position_id not in self.positions:
-            return None
-
-        position = self.positions[position_id]
-
-        # Calculate exit price with slippage
-        if position.direction == Direction.LONG:
-            exit_price = current_price * (1 - self.slippage_pct)
-        else:  # SHORT
-            exit_price = current_price * (1 + self.slippage_pct)
-
         # Calculate P&L
-        if position.direction == Direction.LONG:
-            pnl = (exit_price - position.entry_price) * position.quantity
-        else:  # SHORT
-            pnl = (position.entry_price - exit_price) * position.quantity
+        pnl = position.unrealized_pnl(exit_price)
 
-        # Subtract commission
-        exit_value = position.quantity * exit_price
-        commission = exit_value * self.commission_pct
-        pnl -= (position.entry_price * position.quantity * self.commission_pct)  # Entry commission
-        pnl -= commission  # Exit commission
+        # Update cash: add back original position value + P&L
+        cash = self.get_cash_balance()
+        original_value = position.entry_price * position.quantity
+        new_cash = cash + original_value + pnl
 
-        # Calculate P&L percentage
-        pnl_pct = (pnl / (position.entry_price * position.quantity)) * 100
+        # Update equity
+        equity = self.get_account_value()
+        new_equity = equity + pnl
 
-        # Add proceeds back to balance
-        self.balance += (position.entry_price * position.quantity) + pnl
+        self.db.save_account_state(cash=new_cash, equity=new_equity)
 
-        # Create trade record
-        trade = Trade(
-            id=position.id,
-            timestamp=datetime.now(),
-            pair=position.pair,
-            direction=position.direction,
-            entry_price=position.entry_price,
-            exit_price=exit_price,
-            quantity=position.quantity,
-            pnl=pnl,
-            pnl_pct=pnl_pct,
-            strategy_name=position.strategy_name,
-            entry_timestamp=position.entry_timestamp,
-            exit_timestamp=datetime.now(),
-            exit_reason=reason,
-            commission=commission
-        )
+        return position
 
-        # Remove position
-        del self.positions[position_id]
-        self.db.close_position(position_id)
-        self.db.store_trade(trade)
-        self._save_state()
-
-        return trade
-
-    def close_position_by_pair(
-        self,
-        pair: str,
-        current_price: float,
-        reason: str = ""
-    ) -> Optional[Trade]:
-        """
-        Close position for a specific pair.
+    def update_equity(self, unrealized_pnl: Decimal) -> None:
+        """Update account equity with unrealized P&L.
 
         Args:
-            pair: Trading pair
-            current_price: Current market price
-            reason: Reason for closing
-
-        Returns:
-            Trade object if position closed
+            unrealized_pnl: Total unrealized P&L from all positions
         """
-        position = self._get_position_for_pair(pair)
-        if position:
-            return self.close_position(position.id, current_price, reason)
-        return None
+        cash = self.get_cash_balance()
+        equity = cash + unrealized_pnl
 
-    def _get_position_for_pair(self, pair: str) -> Optional[Position]:
-        """Get open position for a pair."""
-        for position in self.positions.values():
-            if position.pair == pair:
-                return position
-        return None
-
-    def get_portfolio_value(self, current_prices: Dict[str, float]) -> float:
-        """
-        Calculate total portfolio value (balance + positions).
-
-        Args:
-            current_prices: Dict of pair -> current price
-
-        Returns:
-            Total portfolio value
-        """
-        total_value = self.balance
-
-        for position in self.positions.values():
-            if position.pair in current_prices:
-                current_price = current_prices[position.pair]
-                unrealized_pnl = position.unrealized_pnl(current_price)
-                position_value = (position.entry_price * position.quantity) + unrealized_pnl
-                total_value += position_value
-
-        return total_value
-
-    def get_open_positions(self) -> List[Position]:
-        """Get all open positions."""
-        return list(self.positions.values())
-
-    def get_total_return_pct(self) -> float:
-        """Get total return percentage."""
-        return ((self.balance - self.starting_balance) / self.starting_balance) * 100
-
-    @property
-    def position_count(self) -> int:
-        """Number of open positions."""
-        return len(self.positions)
+        self.db.save_account_state(cash=cash, equity=equity)

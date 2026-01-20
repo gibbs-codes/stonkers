@@ -1,126 +1,126 @@
-"""EMA Crossover Strategy."""
+"""EMA Crossover Strategy.
+
+Logic:
+- LONG: Fast EMA crosses ABOVE Slow EMA
+- SHORT: Fast EMA crosses BELOW Slow EMA
+
+Classic trend-following strategy.
+"""
+from decimal import Decimal
+from typing import List, Optional
+
 import pandas as pd
-import ta
-from typing import Optional, List
+
+from src.models.candle import Candle
+from src.models.signal import Signal, SignalType
 from src.strategies.base import Strategy
-from src.data.models import Candle, Signal, Direction
 
 
 class EmaCrossoverStrategy(Strategy):
-    """
-    EMA Crossover Strategy.
+    """EMA crossover trend-following strategy."""
 
-    Logic:
-    - LONG: Fast EMA crosses above Slow EMA
-    - SHORT: Fast EMA crosses below Slow EMA
-    - Exit: Opposite crossover
-    """
-
-    name = "ema_crossover"
-    description = "EMA crossover trend following strategy"
-    required_history = 50
-
-    def configure(self, params: dict) -> None:
-        """Configure strategy parameters."""
-        defaults = self.get_default_params()
-        self.params = {**defaults, **params}
-        # Update required history based on slow EMA
-        self.required_history = self.params['slow_ema'] + 10
-
-    def get_default_params(self) -> dict:
-        """Return default parameters."""
-        return {
-            'fast_ema': 9,
-            'slow_ema': 21
-        }
-
-    def analyze(self, candles: List[Candle]) -> Optional[Signal]:
-        """
-        Analyze candles and generate signal.
+    def __init__(
+        self,
+        fast_period: int = 9,
+        slow_period: int = 21,
+        min_signal_strength: Decimal = Decimal("0.6"),
+    ):
+        """Initialize EMA Crossover strategy.
 
         Args:
-            candles: List of historical candles (newest last)
+            fast_period: Fast EMA period (default 9)
+            slow_period: Slow EMA period (default 21)
+            min_signal_strength: Minimum strength for signal (0.0-1.0)
+        """
+        super().__init__(name="EMA_CROSS")
+        self.fast_period = fast_period
+        self.slow_period = slow_period
+        self.min_signal_strength = min_signal_strength
+
+    def analyze(self, candles: List[Candle]) -> Optional[Signal]:
+        """Analyze candles for EMA crossover signals.
+
+        Args:
+            candles: List of recent candles (oldest first)
 
         Returns:
-            Signal object if conditions met, None otherwise
+            Signal if crossover detected, None otherwise
         """
-        if not self.validate_candles(candles):
+        # Need enough candles for slow EMA + 2 periods for crossover detection
+        min_required = self.slow_period + 2
+        if not self._validate_candles(candles, min_required):
             return None
 
-        # Convert to DataFrame
-        df = pd.DataFrame([
-            {'timestamp': c.timestamp, 'close': c.close}
-            for c in candles
-        ])
+        # Convert to pandas DataFrame
+        df = self._candles_to_df(candles)
 
-        # Calculate EMAs
-        fast_period = self.params['fast_ema']
-        slow_period = self.params['slow_ema']
-
-        df['fast_ema'] = ta.trend.ema_indicator(df['close'], window=fast_period)
-        df['slow_ema'] = ta.trend.ema_indicator(df['close'], window=slow_period)
+        # Calculate both EMAs
+        df['fast_ema'] = df['close'].ewm(span=self.fast_period, adjust=False).mean()
+        df['slow_ema'] = df['close'].ewm(span=self.slow_period, adjust=False).mean()
 
         # Get current and previous values
-        current_fast = df['fast_ema'].iloc[-1]
-        current_slow = df['slow_ema'].iloc[-1]
-        prev_fast = df['fast_ema'].iloc[-2]
-        prev_slow = df['slow_ema'].iloc[-2]
-        current_price = df['close'].iloc[-1]
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
 
-        current_candle = candles[-1]
+        current_fast = current['fast_ema']
+        current_slow = current['slow_ema']
+        previous_fast = previous['fast_ema']
+        previous_slow = previous['slow_ema']
 
-        # Check for bullish crossover (LONG)
-        if prev_fast <= prev_slow and current_fast > current_slow:
-            reasoning = (
-                f"LONG signal: Fast EMA-{fast_period} ({current_fast:.2f}) "
-                f"crossed above Slow EMA-{slow_period} ({current_slow:.2f}). "
-                f"Previous: Fast {prev_fast:.2f}, Slow {prev_slow:.2f}. "
-                f"Current price: {current_price:.2f}. "
-                f"This indicates bullish momentum shift."
-            )
+        # LONG: Fast crosses above slow (golden cross)
+        if previous_fast <= previous_slow and current_fast > current_slow:
+            # Signal strength based on how far apart EMAs are after cross
+            separation_pct = abs((current_fast - current_slow) / current_slow)
+            # Larger separation = stronger signal (more conviction)
+            strength = min(Decimal("1.0"), self.min_signal_strength + Decimal(str(separation_pct * 10)))
 
             return Signal(
-                timestamp=current_candle.timestamp,
-                pair=current_candle.pair,
-                direction=Direction.LONG,
-                strength=0.7,
+                pair=candles[-1].pair,
+                signal_type=SignalType.ENTRY_LONG,
+                strength=strength,
                 strategy_name=self.name,
-                reasoning=reasoning,
+                reasoning=f"Fast EMA ({self.fast_period}) crossed above Slow EMA ({self.slow_period}). Fast: ${current_fast:.2f}, Slow: ${current_slow:.2f}",
+                timestamp=candles[-1].timestamp,
                 indicators={
-                    'price': current_price,
-                    'fast_ema': current_fast,
-                    'slow_ema': current_slow,
-                    'prev_fast_ema': prev_fast,
-                    'prev_slow_ema': prev_slow
-                },
-                timeframe=current_candle.timeframe
+                    'fast_ema': float(current_fast),
+                    'slow_ema': float(current_slow),
+                    'separation_pct': float(separation_pct),
+                }
             )
 
-        # Check for bearish crossover (SHORT)
-        if prev_fast >= prev_slow and current_fast < current_slow:
-            reasoning = (
-                f"SHORT signal: Fast EMA-{fast_period} ({current_fast:.2f}) "
-                f"crossed below Slow EMA-{slow_period} ({current_slow:.2f}). "
-                f"Previous: Fast {prev_fast:.2f}, Slow {prev_slow:.2f}. "
-                f"Current price: {current_price:.2f}. "
-                f"This indicates bearish momentum shift."
-            )
+        # SHORT: Fast crosses below slow (death cross)
+        if previous_fast >= previous_slow and current_fast < current_slow:
+            separation_pct = abs((current_fast - current_slow) / current_slow)
+            strength = min(Decimal("1.0"), self.min_signal_strength + Decimal(str(separation_pct * 10)))
 
             return Signal(
-                timestamp=current_candle.timestamp,
-                pair=current_candle.pair,
-                direction=Direction.SHORT,
-                strength=0.7,
+                pair=candles[-1].pair,
+                signal_type=SignalType.ENTRY_SHORT,
+                strength=strength,
                 strategy_name=self.name,
-                reasoning=reasoning,
+                reasoning=f"Fast EMA ({self.fast_period}) crossed below Slow EMA ({self.slow_period}). Fast: ${current_fast:.2f}, Slow: ${current_slow:.2f}",
+                timestamp=candles[-1].timestamp,
                 indicators={
-                    'price': current_price,
-                    'fast_ema': current_fast,
-                    'slow_ema': current_slow,
-                    'prev_fast_ema': prev_fast,
-                    'prev_slow_ema': prev_slow
-                },
-                timeframe=current_candle.timeframe
+                    'fast_ema': float(current_fast),
+                    'slow_ema': float(current_slow),
+                    'separation_pct': float(separation_pct),
+                }
             )
 
         return None
+
+    def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
+        """Convert candles to pandas DataFrame.
+
+        Args:
+            candles: List of candles
+
+        Returns:
+            DataFrame with OHLCV data
+        """
+        return pd.DataFrame([
+            {
+                'close': float(c.close),
+            }
+            for c in candles
+        ])

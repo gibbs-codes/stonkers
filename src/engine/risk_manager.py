@@ -1,162 +1,133 @@
-"""Risk management system."""
-from datetime import datetime, timedelta
-from typing import Tuple, List
-from src.data.models import Signal, Trade, Direction
-from src.data.storage import Database
-from src.config.settings import config
+"""Risk manager - pure functions for risk checks."""
+from decimal import Decimal
+from typing import Dict, Optional
+
+from src.models.position import Position
+from src.models.signal import Signal
 
 
 class RiskManager:
-    """Risk management and position sizing."""
+    """Manages risk rules and position sizing.
 
-    def __init__(self, db: Database):
-        """
-        Initialize risk manager.
+    Pure functions - no state, no side effects.
+    All decisions based on inputs only.
+    """
 
-        Args:
-            db: Database instance
-        """
-        self.db = db
-        self.max_position_pct = config.get('risk.max_position_pct', 0.1)
-        self.max_daily_loss_pct = config.get('risk.max_daily_loss_pct', 0.05)
-        self.max_open_positions = config.get('risk.max_open_positions', 3)
-
-        self._daily_pnl = 0.0
-        self._last_reset = datetime.now().date()
-
-    def calculate_position_size(
+    def __init__(
         self,
-        signal: Signal,
-        account_value: float,
-        current_price: float
-    ) -> float:
-        """
-        Calculate position size based on account percentage.
+        max_positions: int = 5,
+        max_position_size_pct: Decimal = Decimal("0.2"),  # 20% per position
+        stop_loss_pct: Decimal = Decimal("0.02"),  # 2% stop loss
+        take_profit_pct: Decimal = Decimal("0.05"),  # 5% take profit
+    ):
+        """Initialize risk manager.
 
         Args:
-            signal: Trading signal
-            account_value: Total account value
-            current_price: Current market price
-
-        Returns:
-            Position size in base currency (e.g., BTC quantity)
+            max_positions: Maximum concurrent positions
+            max_position_size_pct: Max % of portfolio per position (0.0 to 1.0)
+            stop_loss_pct: Stop loss percentage (0.0 to 1.0)
+            take_profit_pct: Take profit percentage (0.0 to 1.0)
         """
-        # Max position value based on account
-        max_position_value = account_value * self.max_position_pct
-
-        # Calculate quantity
-        quantity = max_position_value / current_price
-
-        return quantity
+        self.max_positions = max_positions
+        self.max_position_size_pct = max_position_size_pct
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
 
     def can_open_position(
         self,
         signal: Signal,
-        current_positions: List,
-        account_value: float,
-        starting_balance: float
-    ) -> Tuple[bool, str]:
-        """
-        Check if we can open a new position.
+        open_positions_count: int,
+        has_position_for_pair: bool,
+    ) -> tuple[bool, str]:
+        """Check if signal passes all risk rules.
 
         Args:
-            signal: Trading signal
-            current_positions: List of currently open positions
-            account_value: Current account value
-            starting_balance: Starting balance for the day
+            signal: Trading signal to evaluate
+            open_positions_count: Current number of open positions
+            has_position_for_pair: Whether pair already has position
 
         Returns:
-            Tuple of (allowed, reason)
+            Tuple of (can_open: bool, reason: str)
         """
-        # Check if we already have a position for this pair
-        for pos in current_positions:
-            if pos.pair == signal.pair:
-                return False, f"Already have open position for {signal.pair}"
+        # Rule 1: No duplicate positions per pair
+        if has_position_for_pair:
+            return False, f"Already have position for {signal.pair}"
 
-        # Check daily loss limit
-        daily_pnl_pct = ((account_value - starting_balance) / starting_balance) * 100
-        if daily_pnl_pct <= -self.max_daily_loss_pct * 100:
-            return False, f"Daily loss limit reached ({daily_pnl_pct:.2f}%)"
+        # Rule 2: Max concurrent positions
+        if open_positions_count >= self.max_positions:
+            return False, f"Already at max positions ({self.max_positions})"
 
-        # Check max open positions
-        if len(current_positions) >= self.max_open_positions:
-            return False, f"Max open positions ({self.max_open_positions}) reached"
-
-        # Check if signal is actionable
-        if not signal.is_actionable:
+        # Rule 3: Signal strength threshold (must be > 0.5)
+        if signal.strength <= Decimal("0.5"):
             return False, f"Signal strength too weak ({signal.strength})"
 
-        return True, "Risk checks passed"
+        return True, "All risk checks passed"
 
-    def check_daily_limit(self, account_value: float, starting_balance: float) -> Tuple[bool, str]:
-        """
-        Check if daily loss limit has been hit.
+    def calculate_position_size(
+        self,
+        account_value: Decimal,
+        entry_price: Decimal,
+    ) -> Decimal:
+        """Calculate position size based on risk parameters.
 
         Args:
-            account_value: Current account value
-            starting_balance: Starting balance
+            account_value: Total account value
+            entry_price: Price to enter at
 
         Returns:
-            Tuple of (can_trade, reason)
+            Quantity to trade
         """
-        daily_pnl_pct = ((account_value - starting_balance) / starting_balance) * 100
+        # Position value = account_value * max_position_size_pct
+        position_value = account_value * self.max_position_size_pct
 
-        if daily_pnl_pct <= -self.max_daily_loss_pct * 100:
-            return False, f"Daily loss limit hit: {daily_pnl_pct:.2f}%"
+        # Quantity = position_value / entry_price
+        quantity = position_value / entry_price
 
-        return True, "Within daily limits"
+        return quantity
 
     def should_close_position(
         self,
-        position,
-        current_price: float,
-        stop_loss_pct: float = 0.02,
-        take_profit_pct: float = 0.05
-    ) -> Tuple[bool, str]:
-        """
-        Check if position should be closed based on stop loss / take profit.
+        position: Position,
+        current_price: Decimal,
+    ) -> tuple[bool, str]:
+        """Check if position should be closed based on risk rules.
 
         Args:
-            position: Open position
+            position: Open position to check
             current_price: Current market price
-            stop_loss_pct: Stop loss percentage (default 2%)
-            take_profit_pct: Take profit percentage (default 5%)
 
         Returns:
-            Tuple of (should_close, reason)
+            Tuple of (should_close: bool, reason: str)
         """
-        pnl_pct = position.unrealized_pnl_pct(current_price)
+        # Calculate P&L percentage
+        pnl = position.unrealized_pnl(current_price)
+        pnl_pct = pnl / (position.entry_price * position.quantity)
 
-        # Check stop loss
-        if pnl_pct <= -stop_loss_pct * 100:
-            return True, f"Stop loss hit: {pnl_pct:.2f}%"
+        # Stop loss check
+        if pnl_pct <= -self.stop_loss_pct:
+            return True, f"Stop loss hit ({pnl_pct:.2%})"
 
-        # Check take profit
-        if pnl_pct >= take_profit_pct * 100:
-            return True, f"Take profit hit: {pnl_pct:.2f}%"
+        # Take profit check
+        if pnl_pct >= self.take_profit_pct:
+            return True, f"Take profit hit ({pnl_pct:.2%})"
 
-        return False, ""
+        return False, "No exit conditions met"
 
-    def get_risk_metrics(self, account_value: float, starting_balance: float) -> dict:
-        """
-        Get current risk metrics.
+    def get_total_exposure_pct(
+        self,
+        total_exposure: Decimal,
+        account_value: Decimal,
+    ) -> Decimal:
+        """Calculate total exposure as percentage of account.
 
         Args:
-            account_value: Current account value
-            starting_balance: Starting balance
+            total_exposure: Total value of all open positions
+            account_value: Total account value
 
         Returns:
-            Dictionary of risk metrics
+            Exposure percentage (0.0 to 1.0+)
         """
-        daily_pnl = account_value - starting_balance
-        daily_pnl_pct = (daily_pnl / starting_balance) * 100
-        daily_limit_remaining = (self.max_daily_loss_pct * 100) + daily_pnl_pct
+        if account_value <= 0:
+            return Decimal("0")
 
-        return {
-            'daily_pnl': daily_pnl,
-            'daily_pnl_pct': daily_pnl_pct,
-            'daily_limit_remaining_pct': daily_limit_remaining,
-            'max_position_pct': self.max_position_pct * 100,
-            'max_open_positions': self.max_open_positions,
-            'max_daily_loss_pct': self.max_daily_loss_pct * 100
-        }
+        return total_exposure / account_value

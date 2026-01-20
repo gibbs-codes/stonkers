@@ -1,278 +1,154 @@
-"""Main trading bot entry point."""
-import asyncio
-from datetime import datetime
-from typing import Dict
-from src.config.settings import config
-from src.connectors import create_connector
-from src.data.fetcher import DataFetcher
-from src.data.storage import Database
-from src.data.models import Direction
-from src.strategies.registry import StrategyRegistry
+"""Main entry point for the trading bot."""
+import os
+import time
+from decimal import Decimal
+from pathlib import Path
+
+from dotenv import load_dotenv
+from rich.console import Console
+
+from src.connectors.alpaca import AlpacaConnector
+from src.data.database import Database
 from src.engine.paper_trader import PaperTrader
 from src.engine.risk_manager import RiskManager
-from src.logging.trade_logger import TradeLogger
+from src.engine.trading_engine import TradingEngine
+from src.strategies.ema_crossover import EmaCrossoverStrategy
+from src.strategies.ema_rsi import EmaRsiStrategy
+
+console = Console()
+
+# Load environment variables
+load_dotenv()
 
 
-class TradingBot:
-    """Main trading bot orchestrator."""
+def main():
+    """Run the trading bot."""
+    console.print("[bold cyan]🤖 Stonkers Trading Bot v2.0[/bold cyan]\n")
 
-    def __init__(self):
-        """Initialize trading bot."""
-        self.logger = TradeLogger()
-        self.db = Database()
+    # Configuration
+    PAIRS = ["BTC/USD", "ETH/USD"]
+    INITIAL_BALANCE = Decimal("10000")
+    LOOP_INTERVAL = 60  # seconds
 
-        # Create connector using factory pattern
-        exchange_name = config.get('exchange.name', 'alpaca')
-        paper_trading = config.get('exchange.paper_trading', True)
-        self.connector = create_connector(exchange_name, paper_trading)
+    # Initialize components
+    console.print("[bold]Initializing components...[/bold]")
 
-        self.fetcher = DataFetcher(self.connector, self.db)
-        self.strategy_registry = StrategyRegistry()
-        self.paper_trader = PaperTrader(self.db)
-        self.risk_manager = RiskManager(self.db)
+    # Database
+    db = Database(Path("data/stonkers.db"))
 
-        self.running = False
-        self.pairs = config.trading_pairs
-        self.timeframe = config.default_timeframe
+    # Alpaca connector
+    alpaca = AlpacaConnector(
+        api_key=os.getenv("ALPACA_API_KEY"),
+        secret_key=os.getenv("ALPACA_SECRET_KEY"),
+        paper=True,
+    )
 
-    async def start(self):
-        """Start the trading bot."""
-        self.logger.log_info("=" * 60)
-        self.logger.log_info("🚀 STONKERS - Algorithmic Trading Bot")
-        self.logger.log_info("=" * 60)
+    # Risk manager
+    risk_manager = RiskManager(
+        max_positions=5,
+        max_position_size_pct=Decimal("0.2"),  # 20% per position
+        stop_loss_pct=Decimal("0.02"),  # 2% stop loss
+        take_profit_pct=Decimal("0.05"),  # 5% take profit
+    )
 
-        # Connect to exchange
-        exchange_name = config.get('exchange.name', 'alpaca')
-        self.logger.log_info(f"Connecting to {exchange_name.upper()}...")
+    # Paper trader
+    paper_trader = PaperTrader(db, initial_balance=INITIAL_BALANCE)
 
-        paper_trading = config.get('exchange.paper_trading', True)
-        if paper_trading:
-            self.logger.log_warning("⚠️  PAPER TRADING MODE - Using fake money")
-        if config.is_paper_trading:
-            self.logger.log_warning("📄 PAPER TRADING ENGINE - No real orders")
+    # Strategies
+    strategies = [
+        EmaRsiStrategy(
+            ema_period=100,
+            rsi_period=14,
+            rsi_oversold=30,
+            rsi_overbought=70,
+        ),
+        EmaCrossoverStrategy(
+            fast_period=9,
+            slow_period=21,
+        ),
+    ]
 
-        connected = await self.connector.connect()
-        if not connected:
-            self.logger.log_error(Exception("Connection failed"), "Exchange connection")
-            return
+    # Trading engine
+    engine = TradingEngine(
+        db=db,
+        strategies=strategies,
+        risk_manager=risk_manager,
+        paper_trader=paper_trader,
+    )
 
-        self.logger.log_info("✅ Connected to exchange")
+    console.print("[bold green]✓ All components initialized[/bold green]\n")
+    console.print(f"Trading pairs: {', '.join(PAIRS)}")
+    console.print(f"Loop interval: {LOOP_INTERVAL}s\n")
+    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
-        # Load strategies
-        self.logger.log_info(f"\n📊 Loaded {self.strategy_registry.enabled_count} strategies:")
-        for strategy in self.strategy_registry.get_all_strategies():
-            self.logger.log_info(f"  • {strategy.name}: {strategy.description}")
+    # Main loop
+    last_candles = {}  # Cache last successful candles
+    try:
+        while True:
+            console.print(f"[bold blue]━━━ {time.strftime('%Y-%m-%d %H:%M:%S')} ━━━[/bold blue]")
 
-        # Portfolio status
-        self.logger.log_info(f"\n💰 Starting Balance: ${self.paper_trader.balance:.2f}")
-        self.logger.log_info(f"📈 Trading Pairs: {', '.join(self.pairs)}")
-        self.logger.log_info(f"⏱️  Timeframe: {self.timeframe}")
-
-        # Risk parameters
-        risk_metrics = self.risk_manager.get_risk_metrics(
-            self.paper_trader.balance,
-            self.paper_trader.starting_balance
-        )
-        self.logger.log_info(f"\n🛡️  Risk Management:")
-        self.logger.log_info(f"  • Max position size: {risk_metrics['max_position_pct']:.1f}%")
-        self.logger.log_info(f"  • Max open positions: {risk_metrics['max_open_positions']}")
-        self.logger.log_info(f"  • Daily loss limit: {risk_metrics['max_daily_loss_pct']:.1f}%")
-
-        self.logger.log_info("\n" + "=" * 60)
-        self.logger.log_info("🎯 Starting trading loop...")
-        self.logger.log_info("=" * 60 + "\n")
-
-        # Start main loop
-        self.running = True
-        await self.run()
-
-    async def run(self):
-        """Main trading loop."""
-        iteration = 0
-
-        while self.running:
+            # Fetch latest candles
             try:
-                iteration += 1
-                self.logger.log_debug(f"\n--- Iteration {iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-
-                # Fetch latest prices
-                current_prices = {}
-                for pair in self.pairs:
-                    try:
-                        price = await self.connector.get_current_price(pair)
-                        current_prices[pair] = price
-                        self.logger.log_debug(f"{pair}: ${price:.2f}")
-                    except Exception as e:
-                        self.logger.log_error(e, f"Fetching price for {pair}")
-
-                # Check daily loss limit
-                portfolio_value = self.paper_trader.get_portfolio_value(current_prices)
-                can_trade, reason = self.risk_manager.check_daily_limit(
-                    portfolio_value,
-                    self.paper_trader.starting_balance
+                candles_by_pair = alpaca.fetch_recent_candles(
+                    pairs=PAIRS,
+                    limit=200,  # Fetch enough for EMA100 + buffer
                 )
+                last_candles = candles_by_pair  # Cache successful fetch
 
-                if not can_trade:
-                    self.logger.log_warning(f"⛔ Trading halted: {reason}")
-                    await asyncio.sleep(60)
-                    continue
+                # Process candles through engine
+                engine.process_candles(candles_by_pair)
 
-                # Check open positions for exits
-                await self._check_position_exits(current_prices)
-
-                # Analyze each pair with each strategy
-                for pair in self.pairs:
-                    # Fetch latest candles
-                    candles = await self.fetcher.fetch_latest_candles(
-                        pair=pair,
-                        timeframe=self.timeframe,
-                        limit=200
-                    )
-
-                    if not candles:
-                        continue
-
-                    # Run all strategies
-                    for strategy in self.strategy_registry.get_all_strategies():
-                        signal = strategy.analyze(candles)
-
-                        if signal:
-                            self.logger.log_signal(signal)
-
-                            # Handle NEUTRAL signals (exit signals) differently
-                            if signal.direction == Direction.NEUTRAL:
-                                await self._process_exit_signal(signal, current_prices[pair])
-                            else:
-                                await self._process_signal(signal, current_prices[pair])
-
-                # Log portfolio status every 10 iterations
-                if iteration % 10 == 0:
-                    self.logger.log_portfolio_status(
-                        balance=self.paper_trader.balance,
-                        portfolio_value=portfolio_value,
-                        open_positions=self.paper_trader.position_count,
-                        total_return_pct=self.paper_trader.get_total_return_pct()
-                    )
-
-                # Sleep until next iteration (adjust based on timeframe)
-                await asyncio.sleep(60)  # Check every minute
-
-            except KeyboardInterrupt:
-                self.logger.log_info("\n👋 Shutting down...")
-                self.running = False
-                break
             except Exception as e:
-                self.logger.log_error(e, "Main loop")
-                await asyncio.sleep(5)
+                console.print(f"[bold red]Error:[/bold red] {e}")
 
-        # Cleanup
-        await self.connector.close()
-        self.db.close()
-        self.logger.log_info("✅ Shutdown complete")
+                # CRITICAL: Even if we can't fetch new candles, check exit conditions
+                # using last known prices to protect against losses
+                if last_candles:
+                    console.print("[yellow]Using last known prices to check exit conditions...[/yellow]")
+                    # Only check exits, don't look for new entries
+                    for pair, candles in last_candles.items():
+                        if engine.position_manager.has_position(pair) and candles:
+                            position = engine.position_manager.get_position(pair)
+                            current_price = candles[-1].close
 
-    async def _process_signal(self, signal, current_price: float):
-        """
-        Process a trading signal.
+                            should_close, reason = risk_manager.should_close_position(
+                                position, current_price
+                            )
 
-        Args:
-            signal: Trading signal
-            current_price: Current market price
-        """
-        # Check if we can open a position
-        portfolio_value = self.paper_trader.get_portfolio_value({signal.pair: current_price})
+                            if should_close:
+                                paper_trader.execute_exit(position, current_price)
+                                closed = engine.position_manager.close_position(
+                                    pair, current_price, reason
+                                )
+                                pnl = closed.realized_pnl()
+                                console.print(
+                                    f"[yellow]EMERGENCY CLOSE {pair} {position.direction.value}:[/yellow] "
+                                    f"P&L: ${pnl:+.2f} ({reason})"
+                                )
 
-        can_open, reason = self.risk_manager.can_open_position(
-            signal=signal,
-            current_positions=self.paper_trader.get_open_positions(),
-            account_value=portfolio_value,
-            starting_balance=self.paper_trader.starting_balance
-        )
+                    # Update equity with last known prices
+                    total_unrealized = Decimal("0")
+                    for pair, position in engine.position_manager.get_all_open().items():
+                        if pair in last_candles and last_candles[pair]:
+                            current_price = last_candles[pair][-1].close
+                            unrealized = position.unrealized_pnl(current_price)
+                            total_unrealized += unrealized
+                    paper_trader.update_equity(total_unrealized)
 
-        self.logger.log_risk_check(can_open, reason)
+                    engine._display_status()
+                else:
+                    console.print("[red]No cached prices available - cannot check exit conditions[/red]")
 
-        if not can_open:
-            self.logger.log_trade_decision(signal, 'REJECTED', reason)
-            return
+                console.print("[yellow]Continuing to next iteration...[/yellow]\n")
 
-        # Calculate position size
-        quantity = self.risk_manager.calculate_position_size(
-            signal=signal,
-            account_value=portfolio_value,
-            current_price=current_price
-        )
+            # Wait before next iteration
+            time.sleep(LOOP_INTERVAL)
 
-        # Execute trade
-        self.paper_trader.execute_signal(signal, quantity, current_price)
-        self.logger.log_trade_decision(
-            signal,
-            'OPENED',
-            f"Risk checks passed, position size: {quantity:.6f}",
-            quantity=quantity
-        )
-
-    async def _process_exit_signal(self, signal, current_price: float):
-        """
-        Process a NEUTRAL (exit) signal.
-
-        Args:
-            signal: Exit signal
-            current_price: Current market price
-        """
-        # Check if we have an open position for this pair
-        position = None
-        for pos in self.paper_trader.get_open_positions():
-            if pos.pair == signal.pair:
-                position = pos
-                break
-
-        if not position:
-            # No position to close, ignore exit signal
-            return
-
-        # Close the position
-        trade = self.paper_trader.close_position(
-            position.id,
-            current_price,
-            f"Strategy exit: {signal.reasoning}"
-        )
-
-        if trade:
-            self.logger.log_trade_completed(trade)
-
-    async def _check_position_exits(self, current_prices: Dict[str, float]):
-        """
-        Check if any open positions should be closed.
-
-        Args:
-            current_prices: Dict of pair -> current price
-        """
-        for position in self.paper_trader.get_open_positions():
-            if position.pair not in current_prices:
-                continue
-
-            current_price = current_prices[position.pair]
-
-            # Check risk manager for stop loss / take profit
-            should_close, reason = self.risk_manager.should_close_position(
-                position=position,
-                current_price=current_price
-            )
-
-            if should_close:
-                trade = self.paper_trader.close_position(
-                    position.id,
-                    current_price,
-                    reason
-                )
-                if trade:
-                    self.logger.log_trade_completed(trade)
-
-
-async def main():
-    """Entry point."""
-    bot = TradingBot()
-    await bot.start()
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]Shutting down...[/bold yellow]")
+        console.print(f"Final balance: ${paper_trader.get_account_value():.2f}")
+        console.print("[bold green]Goodbye![/bold green]")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
