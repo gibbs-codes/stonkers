@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Logs and data (will be mounted as volumes)
+logs/
+data/
+*.db
+*.db-journal
+
+# CI/CD
+.github/
+
+# Documentation
+*.md
+!README.md
+
+# Environment files (secrets handled separately)
+.env
+.env.*
+
+# Backtest results
+backtest_results/

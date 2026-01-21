@@ -30,7 +30,7 @@ logging:
 
 strategies:
   ema_rsi:
-    enabled: true
+    enabled: false  # Backtest: -1.49%, 28.6% win rate - DISABLED
     params:
       ema_period: 100
       rsi_period: 14
@@ -39,8 +39,23 @@ strategies:
       min_signal_strength: 0.6
 
   ema_crossover:
-    enabled: true
+    enabled: true  # Backtest: +2.20%, 80% win rate, 4.78 PF ✅
     params:
       fast_period: 9
       slow_period: 21
       min_signal_strength: 0.6
+
+  bollinger_squeeze:
+    enabled: true  # Backtest: +1.77%, 80% win rate, 5.25 PF ✅
+    params:
+      bb_period: 20
+      bb_std: 2.0
+      squeeze_threshold: 0.04
+      min_signal_strength: 0.6
+
+  rsi_divergence:
+    enabled: false  # Backtest: -2.65%, 22.2% win rate - DISABLED
+    params:
+      rsi_period: 14
+      lookback_periods: 14
+      min_signal_strength: 0.7
