@@ -6,8 +6,8 @@ exchange:
 
 trading:
   pairs:
-    - BTC/USD
-    - ETH/USD
+    - ETH/USD  # 8.28% 24h volatility - most active!
+    - SOL/USD  # 6.29% 24h volatility
   default_timeframe: 15m
 
 paper_trading:

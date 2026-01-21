@@ -78,13 +78,38 @@ class TradingEngine:
             if pair not in candles_by_pair:
                 continue
 
-            # Get current price from latest candle
-            current_price = candles_by_pair[pair][-1].close
+            candles = candles_by_pair[pair]
+            if not candles:
+                continue
 
-            # Check if risk rules say to close
-            should_close, reason = self.risk_manager.should_close_position(
-                position, current_price
-            )
+            # Get current price from latest candle
+            current_price = candles[-1].close
+
+            # Check RSI-based exit for EMA_RSI strategy positions
+            should_close = False
+            reason = ""
+
+            if position.strategy_name == "EMA_RSI" and len(candles) >= 14:
+                # Calculate current RSI
+                import pandas as pd
+                df = pd.DataFrame([{'close': float(c.close)} for c in candles])
+                delta = df['close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs))
+                current_rsi = rsi.iloc[-1]
+
+                # Exit if RSI in neutral zone (45-55)
+                if 45 <= current_rsi <= 55:
+                    should_close = True
+                    reason = f"RSI neutral zone exit (RSI: {current_rsi:.1f})"
+
+            # If not RSI exit, check risk manager rules (stop loss / take profit)
+            if not should_close:
+                should_close, reason = self.risk_manager.should_close_position(
+                    position, current_price
+                )
 
             if should_close:
                 # Execute exit

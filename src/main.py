@@ -26,7 +26,7 @@ def main():
     console.print("[bold cyan]🤖 Stonkers Trading Bot v2.0[/bold cyan]\n")
 
     # Configuration
-    PAIRS = ["BTC/USD", "ETH/USD"]
+    PAIRS = ["ETH/USD", "SOL/USD"]  # More volatile = more action!
     INITIAL_BALANCE = Decimal("10000")
     LOOP_INTERVAL = 60  # seconds
 
