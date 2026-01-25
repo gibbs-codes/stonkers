@@ -12,7 +12,10 @@ from src.engine.risk_manager import RiskManager
 from src.strategies.bollinger_squeeze import BollingerSqueezeStrategy
 from src.strategies.ema_crossover import EmaCrossoverStrategy
 from src.strategies.ema_rsi import EmaRsiStrategy
+from src.strategies.momentum_thrust import MomentumThrustStrategy
 from src.strategies.rsi_divergence import RsiDivergenceStrategy
+from src.strategies.support_resistance_breakout import SupportResistanceBreakoutStrategy
+from src.strategies.vwap_mean_reversion import VwapMeanReversionStrategy
 
 console = Console()
 load_dotenv()
@@ -71,6 +74,28 @@ def main():
         EmaCrossoverStrategy(),
         BollingerSqueezeStrategy(),
         RsiDivergenceStrategy(),
+        MomentumThrustStrategy(
+            roc_period=14,
+            entry_threshold=5.0,
+            exit_threshold=2.0,
+            volume_multiplier=1.5,
+            min_signal_strength=0.6,
+        ),
+        VwapMeanReversionStrategy(
+            vwap_period=50,
+            std_multiplier=2.0,
+            volume_threshold=1.5,
+            min_signal_strength=0.6,
+        ),
+        SupportResistanceBreakoutStrategy(
+            lookback_period=100,
+            level_tolerance=0.01,
+            min_touches=2,
+            volume_multiplier=1.3,
+            retest_candles=8,
+            retest_tolerance=0.005,
+            min_signal_strength=0.7,
+        ),
     ]
 
     # Risk manager
