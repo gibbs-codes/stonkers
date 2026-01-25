@@ -2,7 +2,7 @@
 from decimal import Decimal
 from typing import Dict, Optional
 
-from src.models.position import Position
+from src.models.position import Position, Direction
 from src.models.signal import Signal
 
 
@@ -57,8 +57,8 @@ class RiskManager:
         if open_positions_count >= self.max_positions:
             return False, f"Already at max positions ({self.max_positions})"
 
-        # Rule 3: Signal strength threshold (must be > 0.5)
-        if signal.strength <= Decimal("0.5"):
+        # Rule 3: Signal strength threshold (allows slightly weaker but still valid signals)
+        if signal.strength <= Decimal("0.4"):
             return False, f"Signal strength too weak ({signal.strength})"
 
         return True, "All risk checks passed"
@@ -99,6 +99,19 @@ class RiskManager:
         Returns:
             Tuple of (should_close: bool, reason: str)
         """
+        # Strategy-specific stop/take precedence when provided
+        if position.stop_loss_price:
+            if position.direction == Direction.LONG and current_price <= position.stop_loss_price:
+                return True, f"Per-signal stop loss hit ({current_price} <= {position.stop_loss_price})"
+            if position.direction == Direction.SHORT and current_price >= position.stop_loss_price:
+                return True, f"Per-signal stop loss hit ({current_price} >= {position.stop_loss_price})"
+
+        if position.take_profit_price:
+            if position.direction == Direction.LONG and current_price >= position.take_profit_price:
+                return True, f"Per-signal take profit hit ({current_price} >= {position.take_profit_price})"
+            if position.direction == Direction.SHORT and current_price <= position.take_profit_price:
+                return True, f"Per-signal take profit hit ({current_price} <= {position.take_profit_price})"
+
         # Calculate P&L percentage
         pnl = position.unrealized_pnl(current_price)
         pnl_pct = pnl / (position.entry_price * position.quantity)

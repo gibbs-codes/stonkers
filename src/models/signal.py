@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class SignalType(Enum):
@@ -30,6 +30,8 @@ class Signal:
     reasoning: str
     timestamp: datetime  # From candle, for reference only
     indicators: Dict[str, Any]  # RSI, EMA values, etc.
+    stop_loss_price: Optional[Decimal] = None  # Optional per-signal stop loss
+    take_profit_price: Optional[Decimal] = None  # Optional per-signal take profit
 
     def __post_init__(self):
         """Validate signal data."""

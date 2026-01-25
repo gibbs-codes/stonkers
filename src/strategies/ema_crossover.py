@@ -23,19 +23,29 @@ class EmaCrossoverStrategy(Strategy):
         self,
         fast_period: int = 9,
         slow_period: int = 21,
-        min_signal_strength: Decimal = Decimal("0.6"),
+        trend_filter_period: int = 200,
+        trend_filter_buffer: float = 0.002,
+        min_signal_strength: Decimal = Decimal("0.55"),
     ):
         """Initialize EMA Crossover strategy.
 
         Args:
             fast_period: Fast EMA period (default 9)
             slow_period: Slow EMA period (default 21)
+            trend_filter_period: Higher-timeframe EMA to filter trades (default 200)
+            trend_filter_buffer: % buffer around trend EMA to avoid chop (default 0.2%)
             min_signal_strength: Minimum strength for signal (0.0-1.0)
         """
         super().__init__(name="EMA_CROSS")
         self.fast_period = fast_period
         self.slow_period = slow_period
-        self.min_signal_strength = min_signal_strength
+        self.trend_filter_period = trend_filter_period
+        self.trend_filter_buffer = trend_filter_buffer
+        self.min_signal_strength = (
+            min_signal_strength
+            if isinstance(min_signal_strength, Decimal)
+            else Decimal(str(min_signal_strength))
+        )
 
     def analyze(self, candles: List[Candle]) -> Optional[Signal]:
         """Analyze candles for EMA crossover signals.
@@ -47,7 +57,7 @@ class EmaCrossoverStrategy(Strategy):
             Signal if crossover detected, None otherwise
         """
         # Need enough candles for slow EMA + 2 periods for crossover detection
-        min_required = self.slow_period + 2
+        min_required = max(self.slow_period, self.trend_filter_period) + 2
         if not self._validate_candles(candles, min_required):
             return None
 
@@ -57,6 +67,7 @@ class EmaCrossoverStrategy(Strategy):
         # Calculate both EMAs
         df['fast_ema'] = df['close'].ewm(span=self.fast_period, adjust=False).mean()
         df['slow_ema'] = df['close'].ewm(span=self.slow_period, adjust=False).mean()
+        df['trend_ema'] = df['close'].ewm(span=self.trend_filter_period, adjust=False).mean()
 
         # Get current and previous values
         current = df.iloc[-1]
@@ -66,9 +77,15 @@ class EmaCrossoverStrategy(Strategy):
         current_slow = current['slow_ema']
         previous_fast = previous['fast_ema']
         previous_slow = previous['slow_ema']
+        trend_ema = current['trend_ema']
+        current_price = current['close']
+
+        # Trend filter: only take longs above higher-timeframe EMA and shorts below
+        long_trend_ok = current_price > trend_ema * (1 + self.trend_filter_buffer)
+        short_trend_ok = current_price < trend_ema * (1 - self.trend_filter_buffer)
 
         # LONG: Fast crosses above slow (golden cross)
-        if previous_fast <= previous_slow and current_fast > current_slow:
+        if long_trend_ok and previous_fast <= previous_slow and current_fast > current_slow:
             # Signal strength based on how far apart EMAs are after cross
             separation_pct = abs((current_fast - current_slow) / current_slow)
             # Larger separation = stronger signal (more conviction)
@@ -84,12 +101,13 @@ class EmaCrossoverStrategy(Strategy):
                 indicators={
                     'fast_ema': float(current_fast),
                     'slow_ema': float(current_slow),
+                    'trend_ema': float(trend_ema),
                     'separation_pct': float(separation_pct),
                 }
             )
 
         # SHORT: Fast crosses below slow (death cross)
-        if previous_fast >= previous_slow and current_fast < current_slow:
+        if short_trend_ok and previous_fast >= previous_slow and current_fast < current_slow:
             separation_pct = abs((current_fast - current_slow) / current_slow)
             strength = min(Decimal("1.0"), self.min_signal_strength + Decimal(str(separation_pct * 10)))
 
@@ -103,6 +121,7 @@ class EmaCrossoverStrategy(Strategy):
                 indicators={
                     'fast_ema': float(current_fast),
                     'slow_ema': float(current_slow),
+                    'trend_ema': float(trend_ema),
                     'separation_pct': float(separation_pct),
                 }
             )

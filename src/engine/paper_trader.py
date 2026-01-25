@@ -88,6 +88,8 @@ class PaperTrader:
             entry_time=datetime.now(timezone.utc),  # Actual trade time, not signal time!
             strategy_name=signal.strategy_name,
             status=PositionStatus.OPEN,
+            stop_loss_price=signal.stop_loss_price,
+            take_profit_price=signal.take_profit_price,
         )
 
         # Update cash (deduct position value)

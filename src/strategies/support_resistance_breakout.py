@@ -23,13 +23,13 @@ class SupportResistanceBreakoutStrategy(Strategy):
 
     def __init__(
         self,
-        lookback_period: int = 100,
-        level_tolerance: float = 0.01,
+        lookback_period: int = 80,
+        level_tolerance: float = 0.012,
         min_touches: int = 2,
-        volume_multiplier: float = 1.3,
-        retest_candles: int = 8,
-        retest_tolerance: float = 0.005,
-        min_signal_strength: float = 0.7,
+        volume_multiplier: float = 1.15,
+        retest_candles: int = 5,
+        retest_tolerance: float = 0.01,
+        min_signal_strength: float = 0.65,
     ):
         """Initialize Support/Resistance Breakout strategy.
 

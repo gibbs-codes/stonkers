@@ -2,6 +2,8 @@
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+import yaml
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -19,6 +21,15 @@ from src.strategies.vwap_mean_reversion import VwapMeanReversionStrategy
 
 console = Console()
 load_dotenv()
+
+
+def load_strategy_params() -> dict:
+    """Load strategy parameters from config/strategy_params.yaml if present."""
+    config_path = Path("config/strategy_params.yaml")
+    if not config_path.exists():
+        return {}
+    with config_path.open() as f:
+        return yaml.safe_load(f) or {}
 
 
 def main():
@@ -68,34 +79,15 @@ def main():
         console.print("[red]No data available. Exiting.[/red]")
         return
 
-    # Initialize strategies
+    params = load_strategy_params()
+
+    # Initialize strategies (prefer YAML params when provided)
     strategies = [
-        EmaRsiStrategy(),
-        EmaCrossoverStrategy(),
+        EmaCrossoverStrategy(**params.get("ema_cross", {})),
         BollingerSqueezeStrategy(),
-        RsiDivergenceStrategy(),
-        MomentumThrustStrategy(
-            roc_period=14,
-            entry_threshold=5.0,
-            exit_threshold=2.0,
-            volume_multiplier=1.5,
-            min_signal_strength=0.6,
-        ),
-        VwapMeanReversionStrategy(
-            vwap_period=50,
-            std_multiplier=2.0,
-            volume_threshold=1.5,
-            min_signal_strength=0.6,
-        ),
-        SupportResistanceBreakoutStrategy(
-            lookback_period=100,
-            level_tolerance=0.01,
-            min_touches=2,
-            volume_multiplier=1.3,
-            retest_candles=8,
-            retest_tolerance=0.005,
-            min_signal_strength=0.7,
-        ),
+        MomentumThrustStrategy(**params.get("momentum_thrust", {})),
+        VwapMeanReversionStrategy(**params.get("vwap_mean_rev", {})),
+        SupportResistanceBreakoutStrategy(**params.get("support_resistance_breakout", {})),
     ]
 
     # Risk manager

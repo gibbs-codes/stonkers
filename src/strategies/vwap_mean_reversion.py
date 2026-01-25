@@ -23,10 +23,11 @@ class VwapMeanReversionStrategy(Strategy):
 
     def __init__(
         self,
-        vwap_period: int = 50,
-        std_multiplier: float = 2.0,
-        volume_threshold: float = 1.5,
-        min_signal_strength: float = 0.6,
+        vwap_period: int = 45,
+        std_multiplier: float = 1.3,
+        volume_threshold: float = 1.0,
+        min_signal_strength: float = 0.5,
+        stretch_factor: float = 0.8,
     ):
         """Initialize VWAP Mean Reversion strategy.
 
@@ -41,6 +42,7 @@ class VwapMeanReversionStrategy(Strategy):
         self.std_multiplier = std_multiplier
         self.volume_threshold = volume_threshold
         self.min_signal_strength = min_signal_strength
+        self.stretch_factor = stretch_factor
 
     def analyze(self, candles: List[Candle]) -> Optional[Signal]:
         """Analyze candles for VWAP mean reversion signals.
@@ -96,12 +98,15 @@ class VwapMeanReversionStrategy(Strategy):
 
         # Calculate distance from VWAP in standard deviations
         distance_in_std = abs(current_price - current_vwap) / current_std if current_std > 0 else 0
+        # Require a minimum stretch beyond band to avoid tiny pierces
+        stretched_enough = distance_in_std >= (self.std_multiplier * self.stretch_factor)
 
         # LONG Signal: Price crosses below lower band with volume confirmation
         # Mean reversion bet: price will revert back up to VWAP
         if (previous['close'] >= previous['lower_band'] and
             current_price < lower_band and
-            volume_confirmed):
+            volume_confirmed and
+            stretched_enough):
 
             # Signal strength based on how far from VWAP (farther = stronger mean reversion setup)
             # But cap it - too far might indicate trend change rather than reversion
@@ -128,14 +133,17 @@ class VwapMeanReversionStrategy(Strategy):
                     'volume': float(current_volume),
                     'avg_volume': float(avg_volume),
                     'volume_ratio': float(volume_ratio),
-                }
+                },
+                stop_loss_price=Decimal(str(max(0.0, float(lower_band - (current_std * 0.5))))),
+                take_profit_price=Decimal(str(current_vwap)),
             )
 
         # SHORT Signal: Price crosses above upper band with volume confirmation
         # Mean reversion bet: price will revert back down to VWAP
         if (previous['close'] <= previous['upper_band'] and
             current_price > upper_band and
-            volume_confirmed):
+            volume_confirmed and
+            stretched_enough):
 
             # Signal strength based on distance from VWAP
             strength_factor = min(1.0, distance_in_std / (self.std_multiplier * 1.5))
@@ -161,7 +169,9 @@ class VwapMeanReversionStrategy(Strategy):
                     'volume': float(current_volume),
                     'avg_volume': float(avg_volume),
                     'volume_ratio': float(volume_ratio),
-                }
+                },
+                stop_loss_price=Decimal(str(current_price + (current_std * 0.5))),
+                take_profit_price=Decimal(str(current_vwap)),
             )
 
         return None

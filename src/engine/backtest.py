@@ -225,17 +225,21 @@ class BacktestEngine:
     def _calculate_metrics(self) -> Dict:
         """Calculate performance metrics."""
         if not self.trades:
+            # Ensure downstream code always receives the full metrics shape even when
+            # no trades were taken (prevents KeyError on display).
+            final_equity = float(self.paper_trader.get_account_value())
             return {
-                'total_return': 0,
-                'total_return_pct': 0,
+                'total_return': 0.0,
+                'total_return_pct': 0.0,
                 'total_trades': 0,
                 'winners': 0,
                 'losers': 0,
-                'win_rate': 0,
-                'avg_win': 0,
-                'avg_loss': 0,
-                'profit_factor': 0,
-                'max_drawdown': 0,
+                'win_rate': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
+                'profit_factor': 0.0,
+                'max_drawdown': 0.0,
+                'final_equity': final_equity,
             }
 
         final_equity = self.paper_trader.get_account_value()

@@ -44,9 +44,19 @@ class Database:
                 exit_price TEXT,
                 exit_time TEXT,
                 exit_reason TEXT,
+                stop_loss_price TEXT,
+                take_profit_price TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+
+        # Backwards-compat: add stop/take columns if table already existed
+        for column in ("stop_loss_price", "take_profit_price"):
+            try:
+                cursor.execute(f"ALTER TABLE positions ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError:
+                # Column likely exists already
+                pass
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_positions_status
@@ -113,8 +123,9 @@ class Database:
         cursor.execute("""
             INSERT INTO positions (
                 id, pair, direction, entry_price, quantity, entry_time,
-                strategy_name, status, exit_price, exit_time, exit_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                strategy_name, status, exit_price, exit_time, exit_reason,
+                stop_loss_price, take_profit_price
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position.id,
             position.pair,
@@ -126,7 +137,9 @@ class Database:
             position.status.value,
             str(position.exit_price) if position.exit_price else None,
             position.exit_time.isoformat() if position.exit_time else None,
-            position.exit_reason
+            position.exit_reason,
+            str(position.stop_loss_price) if position.stop_loss_price else None,
+            str(position.take_profit_price) if position.take_profit_price else None,
         ))
         self.conn.commit()
 
@@ -278,7 +291,9 @@ class Database:
             status=PositionStatus(row['status']),
             exit_price=Decimal(row['exit_price']) if row['exit_price'] else None,
             exit_time=datetime.fromisoformat(row['exit_time']) if row['exit_time'] else None,
-            exit_reason=row['exit_reason'] or ""
+            exit_reason=row['exit_reason'] or "",
+            stop_loss_price=Decimal(row['stop_loss_price']) if row['stop_loss_price'] else None,
+            take_profit_price=Decimal(row['take_profit_price']) if row['take_profit_price'] else None,
         )
 
     def close(self):

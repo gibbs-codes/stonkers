@@ -36,6 +36,8 @@ class Position:
     exit_price: Optional[Decimal] = None
     exit_time: Optional[datetime] = None
     exit_reason: str = ""
+    stop_loss_price: Optional[Decimal] = None
+    take_profit_price: Optional[Decimal] = None
 
     def __post_init__(self):
         """Validate position data."""
@@ -63,6 +65,12 @@ class Position:
 
         if self.exit_price is not None and self.exit_price <= 0:
             raise ValueError("exit_price must be positive")
+
+        if self.stop_loss_price is not None and self.stop_loss_price <= 0:
+            raise ValueError("stop_loss_price must be positive")
+
+        if self.take_profit_price is not None and self.take_profit_price <= 0:
+            raise ValueError("take_profit_price must be positive")
 
         # Quantity validation
         if self.quantity <= 0:

@@ -23,11 +23,11 @@ class MomentumThrustStrategy(Strategy):
 
     def __init__(
         self,
-        roc_period: int = 14,
-        entry_threshold: float = 5.0,
-        exit_threshold: float = 2.0,
-        volume_multiplier: float = 1.5,
-        min_signal_strength: float = 0.6,
+        roc_period: int = 10,
+        entry_threshold: float = 2.0,
+        exit_threshold: float = 1.0,
+        volume_multiplier: float = 0.8,
+        min_signal_strength: float = 0.5,
     ):
         """Initialize Momentum Thrust strategy.
 
@@ -73,6 +73,7 @@ class MomentumThrustStrategy(Strategy):
         # Get current and previous values
         current = df.iloc[-1]
         previous = df.iloc[-2]
+        recent = df.iloc[-3:]
 
         current_roc = current['roc']
         previous_roc = previous['roc']
@@ -114,6 +115,28 @@ class MomentumThrustStrategy(Strategy):
                 }
             )
 
+        # LONG fallback: sustained thrust (current and previous two candles above threshold)
+        if all(recent['roc'] > self.entry_threshold):
+            roc_strength = min(1.0, current_roc / (self.entry_threshold * 2))
+            strength = Decimal(str(max(self.min_signal_strength, roc_strength)))
+            volume_ratio = current_volume / avg_volume
+
+            return Signal(
+                pair=candles[-1].pair,
+                signal_type=SignalType.ENTRY_LONG,
+                strength=strength,
+                strategy_name=self.name,
+                reasoning=f"Sustained momentum LONG: ROC held above +{self.entry_threshold}% for 3 bars (ROC: {current_roc:.2f}%) with {volume_ratio:.1f}x volume",
+                timestamp=candles[-1].timestamp,
+                indicators={
+                    'roc': float(current_roc),
+                    'roc_threshold': self.entry_threshold,
+                    'volume': float(current_volume),
+                    'avg_volume': float(avg_volume),
+                    'volume_ratio': float(volume_ratio),
+                }
+            )
+
         # SHORT Signal: ROC crosses below -threshold with volume confirmation
         if (previous_roc >= -self.entry_threshold and
             current_roc < -self.entry_threshold and
@@ -131,6 +154,28 @@ class MomentumThrustStrategy(Strategy):
                 strength=strength,
                 strategy_name=self.name,
                 reasoning=f"Momentum thrust SHORT: ROC crossed below -{self.entry_threshold}% (ROC: {current_roc:.2f}%) with {volume_ratio:.1f}x volume spike",
+                timestamp=candles[-1].timestamp,
+                indicators={
+                    'roc': float(current_roc),
+                    'roc_threshold': -self.entry_threshold,
+                    'volume': float(current_volume),
+                    'avg_volume': float(avg_volume),
+                    'volume_ratio': float(volume_ratio),
+                }
+            )
+
+        # SHORT fallback: sustained thrust down (current and previous two candles below -threshold)
+        if all(recent['roc'] < -self.entry_threshold):
+            roc_strength = min(1.0, abs(current_roc) / (self.entry_threshold * 2))
+            strength = Decimal(str(max(self.min_signal_strength, roc_strength)))
+            volume_ratio = current_volume / avg_volume
+
+            return Signal(
+                pair=candles[-1].pair,
+                signal_type=SignalType.ENTRY_SHORT,
+                strength=strength,
+                strategy_name=self.name,
+                reasoning=f"Sustained momentum SHORT: ROC held below -{self.entry_threshold}% for 3 bars (ROC: {current_roc:.2f}%) with {volume_ratio:.1f}x volume",
                 timestamp=candles[-1].timestamp,
                 indicators={
                     'roc': float(current_roc),

@@ -24,25 +24,40 @@ class EmaRsiStrategy(Strategy):
         self,
         ema_period: int = 100,
         rsi_period: int = 14,
-        rsi_oversold: int = 30,
-        rsi_overbought: int = 70,
+        rsi_oversold: int = 38,
+        rsi_overbought: int = 62,
         min_signal_strength: Decimal = Decimal("0.6"),
+        max_distance_from_ema_pct: float = 0.06,
+        atr_period: int = 14,
+        atr_multiplier_stop: float = 1.5,
+        proximity_pct: float = 0.01,
     ):
         """Initialize EMA + RSI strategy.
 
         Args:
             ema_period: Period for trend EMA (default 100)
             rsi_period: Period for RSI calculation (default 14)
-            rsi_oversold: RSI oversold level (default 30)
-            rsi_overbought: RSI overbought level (default 70)
+            rsi_oversold: RSI oversold level (default 32)
+            rsi_overbought: RSI overbought level (default 68)
             min_signal_strength: Minimum strength for signal (0.0-1.0)
+            max_distance_from_ema_pct: Skip trades if price is too far from EMA (default 8%)
+            atr_period: ATR period (default 14)
+            atr_multiplier_stop: ATR-based stop distance multiplier (default 1.5)
         """
         super().__init__(name="EMA_RSI")
         self.ema_period = ema_period
         self.rsi_period = rsi_period
         self.rsi_oversold = rsi_oversold
         self.rsi_overbought = rsi_overbought
-        self.min_signal_strength = min_signal_strength
+        self.min_signal_strength = (
+            min_signal_strength
+            if isinstance(min_signal_strength, Decimal)
+            else Decimal(str(min_signal_strength))
+        )
+        self.max_distance_from_ema_pct = max_distance_from_ema_pct
+        self.atr_period = atr_period
+        self.atr_multiplier_stop = atr_multiplier_stop
+        self.proximity_pct = proximity_pct
 
     def analyze(self, candles: List[Candle]) -> Optional[Signal]:
         """Analyze candles for EMA + RSI confluence signals.
@@ -67,6 +82,10 @@ class EmaRsiStrategy(Strategy):
         # Calculate RSI
         df['rsi'] = self._calculate_rsi(df['close'], self.rsi_period)
 
+        # Calculate ATR for dynamic stop sizing
+        df['tr'] = self._calculate_true_range(df)
+        df['atr'] = df['tr'].rolling(window=self.atr_period).mean()
+
         # Get latest values
         current = df.iloc[-1]
         previous = df.iloc[-2]
@@ -75,13 +94,23 @@ class EmaRsiStrategy(Strategy):
         current_rsi = current['rsi']
         previous_rsi = previous['rsi']
         ema = current['ema']
+        distance_pct = abs((current_price - ema) / ema)
+
+        # Avoid catching extreme knives far from EMA
+        if distance_pct > self.max_distance_from_ema_pct:
+            return None
+
+        atr = current['atr']
+        atr_stop = float(atr) * self.atr_multiplier_stop if not pd.isna(atr) else None
 
         # LONG signal: Price < EMA AND RSI crosses above oversold
-        if current_price < ema and previous_rsi <= self.rsi_oversold < current_rsi:
-            # Calculate signal strength based on distance from EMA
-            distance_pct = abs((current_price - ema) / ema)
+        if current_price < ema and previous_rsi <= self.rsi_oversold < current_rsi and distance_pct <= self.proximity_pct:
             # Closer to EMA = stronger signal (more likely to revert)
             strength = max(self.min_signal_strength, Decimal(str(1.0 - min(distance_pct, 0.4))))
+            stop_price = None
+            if atr_stop is not None:
+                stop_price = Decimal(str(max(0.0, float(current_price) - atr_stop)))
+            take_profit = Decimal(str(ema))
 
             return Signal(
                 pair=candles[-1].pair,
@@ -95,14 +124,20 @@ class EmaRsiStrategy(Strategy):
                     'rsi': float(current_rsi),
                     'price': float(current_price),
                     'distance_from_ema_pct': float(distance_pct),
-                }
+                    'atr': float(atr) if atr_stop is not None else None,
+                    'atr_stop': atr_stop,
+                },
+                stop_loss_price=stop_price,
+                take_profit_price=take_profit,
             )
 
         # SHORT signal: Price > EMA AND RSI crosses below overbought
-        if current_price > ema and previous_rsi >= self.rsi_overbought > current_rsi:
-            # Calculate signal strength based on distance from EMA
-            distance_pct = abs((current_price - ema) / ema)
+        if current_price > ema and previous_rsi >= self.rsi_overbought > current_rsi and distance_pct <= self.proximity_pct:
             strength = max(self.min_signal_strength, Decimal(str(1.0 - min(distance_pct, 0.4))))
+            stop_price = None
+            if atr_stop is not None:
+                stop_price = Decimal(str(float(current_price) + atr_stop))
+            take_profit = Decimal(str(ema))
 
             return Signal(
                 pair=candles[-1].pair,
@@ -116,7 +151,11 @@ class EmaRsiStrategy(Strategy):
                     'rsi': float(current_rsi),
                     'price': float(current_price),
                     'distance_from_ema_pct': float(distance_pct),
-                }
+                    'atr': float(atr) if atr_stop is not None else None,
+                    'atr_stop': atr_stop,
+                },
+                stop_loss_price=stop_price,
+                take_profit_price=take_profit,
             )
 
         return None
@@ -160,3 +199,12 @@ class EmaRsiStrategy(Strategy):
         rsi = 100 - (100 / (1 + rs))
 
         return rsi
+
+    def _calculate_true_range(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate True Range for ATR."""
+        prev_close = df['close'].shift(1)
+        tr1 = df['high'] - df['low']
+        tr2 = (df['high'] - prev_close).abs()
+        tr3 = (df['low'] - prev_close).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr
