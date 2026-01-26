@@ -33,6 +33,20 @@ data/*.db
 data/*.sqlite
 logs/*.log
 logs/*.jsonl
+*.txt
+logs.txt
+
+# Temporary analysis and build artifacts
+BACKTEST_*.md
+STRATEGY_ANALYSIS.md
+PNL_ANALYSIS.md
+TEST_*.md
+VALIDATION_REPORT.md
+RUN_TESTS.md
+PHASE_COMPLETION.md
+IMPROVEMENTS.md
+NEXT_STEPS.md
+BUILD_PLAN.md
 
 # IDE
 .vscode/

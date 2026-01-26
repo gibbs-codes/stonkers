@@ -12,7 +12,7 @@ trading:
 
 paper_trading:
   enabled: true  # ALWAYS true until explicitly changed
-  starting_balance: 10000  # USD
+  starting_balance: 1000  # USD - matches real funding amount
   slippage_pct: 0.001  # 0.1% simulated slippage
 
 risk:
