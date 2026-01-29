@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
 
+from src.config.settings import Config
 from src.connectors.alpaca import AlpacaConnector
 from src.data.database import Database
 from src.engine.paper_trader import PaperTrader
@@ -28,9 +29,12 @@ def main():
     """Run the trading bot."""
     console.print("[bold cyan]🤖 Stonkers Trading Bot v2.0[/bold cyan]\n")
 
+    # Load configuration
+    config = Config.from_yaml(Path("config.yaml"))
+
     # Configuration
-    PAIRS = ["ETH/USD", "SOL/USD"]  # More volatile = more action!
-    INITIAL_BALANCE = Decimal("10000")
+    PAIRS = config.trading.pairs
+    INITIAL_BALANCE = config.paper_trading.starting_balance
     LOOP_INTERVAL = 60  # seconds
 
     # Initialize components
@@ -48,10 +52,10 @@ def main():
 
     # Risk manager
     risk_manager = RiskManager(
-        max_positions=5,
-        max_position_size_pct=Decimal("0.2"),  # 20% per position
-        stop_loss_pct=Decimal("0.02"),  # 2% stop loss
-        take_profit_pct=Decimal("0.05"),  # 5% take profit
+        max_positions=config.risk.max_open_positions,
+        max_position_size_pct=config.risk.max_position_pct,
+        stop_loss_pct=config.risk.stop_loss_pct,
+        take_profit_pct=config.risk.take_profit_pct,
     )
 
     # Paper trader

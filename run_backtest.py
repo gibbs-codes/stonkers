@@ -41,7 +41,7 @@ def main():
     # Configuration
     PAIRS = ["ETH/USD", "SOL/USD"]
     DAYS_BACK = 30  # Test last 30 days
-    INITIAL_BALANCE = Decimal("10000")
+    INITIAL_BALANCE = Decimal("1000")  # Updated for real funding amount
 
     # Date range
     end_date = datetime.now(timezone.utc)
