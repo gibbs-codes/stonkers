@@ -92,7 +92,7 @@ class BollingerSqueezeStrategy(Strategy):
         # LONG: Price breaks above upper band after squeeze
         if current_price > upper_band and previous['close'] <= previous['upper_band']:
             # Calculate signal strength based on breakout strength
-            breakout_pct = (current_price - upper_band) / sma
+            breakout_pct = float((current_price - upper_band) / sma)
             # Stronger breakout = higher strength
             strength = min(
                 Decimal("1.0"),
@@ -117,7 +117,7 @@ class BollingerSqueezeStrategy(Strategy):
 
         # SHORT: Price breaks below lower band after squeeze
         if current_price < lower_band and previous['close'] >= previous['lower_band']:
-            breakout_pct = (lower_band - current_price) / sma
+            breakout_pct = float((lower_band - current_price) / sma)
             strength = min(
                 Decimal("1.0"),
                 self.min_signal_strength + Decimal(str(breakout_pct * 10))
