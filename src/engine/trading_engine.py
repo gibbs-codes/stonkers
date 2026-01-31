@@ -1,7 +1,7 @@
 """Main trading engine - orchestrates the trading loop."""
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from rich.console import Console
 from rich.table import Table
@@ -24,7 +24,7 @@ class TradingEngine:
         db: Database,
         strategies: List[Strategy],
         risk_manager: RiskManager,
-        paper_trader: PaperTrader,
+        trader: Union[PaperTrader, "LiveTrader"],
     ):
         """Initialize trading engine.
 
@@ -32,17 +32,20 @@ class TradingEngine:
             db: Database instance
             strategies: List of strategies to execute
             risk_manager: Risk manager instance
-            paper_trader: Paper trader instance
+            trader: Paper or live trader instance
         """
         self.db = db
         self.strategies = strategies
         self.risk_manager = risk_manager
-        self.paper_trader = paper_trader
+        self.trader = trader
         self.position_manager = PositionManager(db)
+
+        # Keep backwards compatibility
+        self.paper_trader = trader
 
         console.print("\n[bold green]Trading Engine Initialized[/bold green]")
         console.print(f"Strategies: {', '.join(s.name for s in strategies)}")
-        console.print(f"Starting Balance: ${paper_trader.get_account_value()}")
+        console.print(f"Starting Balance: ${trader.get_account_value()}")
         console.print()
 
     def process_candles(self, candles_by_pair: Dict[str, List[Candle]]) -> None:

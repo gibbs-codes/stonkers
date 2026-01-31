@@ -134,10 +134,10 @@ jobs:
         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep stonkers-production || docker ps
         echo ""
         echo "💎 Your Automated Trading Bot:"
-        echo "  📊 Mode: Paper Trading (Safe!)"
-        echo "  💰 Starting Balance: $10,000"
+        echo "  ⚡ Mode: Alpaca Paper API (Real API, Fake Money)"
+        echo "  💰 Account Balance: Uses Alpaca paper account balance"
         echo "  📈 Pairs: ETH/USD, SOL/USD"
-        echo "  🤖 Strategies: EMA_CROSS, BB_SQUEEZE"
+        echo "  🤖 Strategy: Bollinger Squeeze (66.7% win rate)"
         echo "  📁 Logs: ~/deployments/stonkers/logs/"
         echo "  💾 Database: ~/deployments/stonkers/data/stonkers.db"
         echo ""

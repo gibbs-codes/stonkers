@@ -2,7 +2,7 @@
 
 exchange:
   name: alpaca
-  paper: true  # ALWAYS true until explicitly changed
+  paper: true  # TRUE = Alpaca paper account (fake money, real API)
 
 trading:
   pairs:
@@ -11,9 +11,9 @@ trading:
   default_timeframe: 15m
 
 paper_trading:
-  enabled: true  # ALWAYS true until explicitly changed
-  starting_balance: 1000  # USD - matches real funding amount
-  slippage_pct: 0.001  # 0.1% simulated slippage
+  enabled: false  # FALSE = Use live Alpaca API for real trades
+  starting_balance: 1000  # USD - only used in paper mode
+  slippage_pct: 0.001  # 0.1% simulated slippage - only used in paper mode
 
 risk:
   max_position_pct: 0.2      # Max 20% of account per trade
