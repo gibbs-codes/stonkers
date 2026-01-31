@@ -267,7 +267,8 @@ class SupportResistanceBreakoutStrategy(Strategy):
 
                     # Calculate signal strength based on bounce strength and volume
                     bounce_pct = (bounce_height / retest_price) * 100
-                    strength = min(1.0, self.min_signal_strength + bounce_pct * 2)
+                    # Ensure strength is always positive and between min_signal_strength and 1.0
+                    strength = max(self.min_signal_strength, min(1.0, self.min_signal_strength + abs(bounce_pct) * 2))
 
                     return Signal(
                         pair=candles[-1].pair,
@@ -362,7 +363,8 @@ class SupportResistanceBreakoutStrategy(Strategy):
 
                     # Calculate signal strength
                     rejection_pct = (rejection_depth / retest_price) * 100
-                    strength = min(1.0, self.min_signal_strength + rejection_pct * 2)
+                    # Ensure strength is always positive and between min_signal_strength and 1.0
+                    strength = max(self.min_signal_strength, min(1.0, self.min_signal_strength + abs(rejection_pct) * 2))
 
                     return Signal(
                         pair=candles[-1].pair,

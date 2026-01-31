@@ -62,11 +62,13 @@ def main():
     )
 
     # Fetch enough candles for the date range
-    # 1 minute candles for 30 days = 30 * 24 * 60 = 43,200 candles
-    # Alpaca limits to 10,000, so we'll get what we can
+    # 15 minute candles for 30 days = 30 * 24 * 4 = 2,880 candles
+    # Alpaca limits to 10,000, so we have plenty of room
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     candles_by_pair = alpaca.fetch_recent_candles(
         pairs=PAIRS,
-        limit=10000,  # Max from Alpaca
+        timeframe=TimeFrame(15, TimeFrameUnit.Minute),
+        limit=3000,  # ~31 days of 15-min candles
     )
 
     for pair, candles in candles_by_pair.items():

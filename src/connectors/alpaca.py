@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from alpaca.data.historical import CryptoHistoricalDataClient
 from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
@@ -34,25 +34,30 @@ class AlpacaConnector:
     def fetch_recent_candles(
         self,
         pairs: List[str],
-        timeframe: TimeFrame = TimeFrame.Minute,
+        timeframe: TimeFrame = None,
         limit: int = 200,
     ) -> Dict[str, List[Candle]]:
         """Fetch recent candles for given pairs.
 
         Args:
             pairs: List of trading pairs (e.g., ["BTC/USD", "ETH/USD"])
-            timeframe: Timeframe for candles (default 1 minute)
+            timeframe: Timeframe for candles (default 15 minutes)
             limit: Number of candles to fetch (default 200)
 
         Returns:
             Dict mapping pair -> list of Candles (oldest first)
         """
+        # Default to 15-minute candles
+        if timeframe is None:
+            timeframe = TimeFrame(15, TimeFrameUnit.Minute)
+
         # Calculate start/end times
         end = datetime.now(timezone.utc)
 
         # Calculate start time based on timeframe and limit
-        # For simplicity, fetch last 24 hours
-        start = end - timedelta(hours=24)
+        # For 15-min candles with limit 200, we need ~50 hours of data
+        # Fetch last 7 days to be safe
+        start = end - timedelta(days=7)
 
         # Build request
         request = CryptoBarsRequest(
