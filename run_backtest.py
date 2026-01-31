@@ -23,10 +23,16 @@ console = Console()
 load_dotenv()
 
 
-def load_strategy_params() -> dict:
-    """Load strategy parameters from config/strategy_params.yaml if present."""
-    config_path = Path("config/strategy_params.yaml")
+def load_strategy_params(config_file: str = "config/loose_params.yaml") -> dict:
+    """Load strategy parameters from a config file.
+
+    Args:
+        config_file: Path to YAML params file. Defaults to loose_params.yaml
+                     for signal-generation testing. Use strategy_params.yaml for production.
+    """
+    config_path = Path(config_file)
     if not config_path.exists():
+        console.print(f"[yellow]Warning: {config_file} not found, using strategy defaults[/yellow]")
         return {}
     with config_path.open() as f:
         return yaml.safe_load(f) or {}
@@ -82,6 +88,7 @@ def main():
         return
 
     params = load_strategy_params()
+    console.print(f"[dim]Params loaded from: config/loose_params.yaml[/dim]\n")
 
     # Initialize strategies (prefer YAML params when provided)
     strategies = [

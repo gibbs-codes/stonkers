@@ -1,0 +1,55 @@
+# Loose parameters for signal generation testing
+# Goal: maximize signal count to understand strategy behavior
+# These are NOT for production - use strategy_params.yaml for live trading
+#
+# Diagnostic findings (15-min candles, 30-day window):
+#   Momentum Thrust: ROC range observed -2.5% to +2.7%, volume often near 0
+#   VWAP Mean Rev:   Price near bands but cross + volume rarely align together
+#   SR Breakout:     Breakouts found but retest never hits within 5-candle window
+#
+# Target signal counts (30 days, ETH + SOL):
+#   Momentum Thrust:  10-20 signals
+#   VWAP Mean Rev:    10-15 signals
+#   SR Breakout:       5-10 signals
+
+# ---------------------------------------------------------------------------
+# MOMENTUM THRUST
+# Key lever: entry_threshold (ROC % to trigger) + volume_multiplier
+# ROC maxes at ~2.7% on 15-min, so 1.5% catches real moves without noise.
+# Volume gating dropped to 0.3x — 15-min candle volume is unreliable.
+# ---------------------------------------------------------------------------
+momentum_thrust:
+  roc_period: 10
+  entry_threshold: 1.5       # was 2.0 → catches 1.5%+ moves (well within observed range)
+  exit_threshold: 0.5        # was 1.0 → tighter neutral zone
+  volume_multiplier: 0.3     # was 0.8 → near-zero volume on 15-min, stop gating
+  min_signal_strength: 0.3   # was 0.5 → let weak-but-real signals through
+
+# ---------------------------------------------------------------------------
+# VWAP MEAN REVERSION
+# Key lever: std_multiplier (band width) + volume_threshold + stretch_factor
+# Lowering std_multiplier widens acceptance (price doesn't need to stretch as far).
+# volume_threshold at 0.3x = effectively off. stretch_factor at 0.4 matches.
+# ---------------------------------------------------------------------------
+vwap_mean_rev:
+  vwap_period: 45
+  std_multiplier: 1.0        # was 1.3 → wider bands = more crosses qualify
+  volume_threshold: 0.3      # was 1.0 → volume was blocking every valid cross
+  min_signal_strength: 0.3   # was 0.5 → accept weaker setups
+  stretch_factor: 0.4        # was 0.8 → min stretch = 1.0 * 0.4 = 0.4σ, very permissive
+
+# ---------------------------------------------------------------------------
+# SUPPORT / RESISTANCE BREAKOUT
+# Key lever: retest_candles (window) + retest_tolerance + min_touches
+# The retest was the killer — 5 candles is ~75 min, not enough for crypto to pull back.
+# 20 candles = 5 hours. Tolerance at 2.5% lets a "close enough" retest count.
+# min_touches=1 allows single-touch levels (more levels = more breakout candidates).
+# ---------------------------------------------------------------------------
+support_resistance_breakout:
+  lookback_period: 100       # was 80 → more history = more levels identified
+  level_tolerance: 0.02      # was 0.012 → wider clustering catches more levels
+  min_touches: 1             # was 2 → single-touch levels are valid candidates
+  volume_multiplier: 0.7     # was 1.15 → stop requiring volume spike on breakout
+  retest_candles: 20         # was 5 → give 5 hours for retest (was only 75 min)
+  retest_tolerance: 0.025    # was 0.01 → 2.5% proximity = realistic for crypto
+  min_signal_strength: 0.4   # was 0.65 → accept weaker bounce/rejection confirms
