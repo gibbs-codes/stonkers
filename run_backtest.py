@@ -18,7 +18,9 @@ from src.strategies.ema_rsi import EmaRsiStrategy
 from src.strategies.momentum_thrust import MomentumThrustStrategy
 from src.strategies.rsi_divergence import RsiDivergenceStrategy
 from src.strategies.support_resistance_breakout import SupportResistanceBreakoutStrategy
+from src.strategies.range_trader import RangeTraderStrategy
 from src.strategies.vwap_mean_reversion import VwapMeanReversionStrategy
+from src.analysis.mtf_context import MtfContext
 
 console = Console()
 load_dotenv()
@@ -100,14 +102,29 @@ def main():
     params = load_strategy_params(args.config)
     console.print(f"[dim]Params loaded from: {args.config}[/dim]\n")
 
+    # Collect timeframes needed for MTF filter
+    mtf_timeframes = set()
+
     # Initialize strategies (prefer YAML params when provided)
     strategies = [
         EmaCrossoverStrategy(**params.get("ema_cross", {})),
-        BollingerSqueezeStrategy(),
+        BollingerSqueezeStrategy(**(params.get("bb_squeeze") or {})),
         MomentumThrustStrategy(**params.get("momentum_thrust", {})),
         VwapMeanReversionStrategy(**params.get("vwap_mean_rev", {})),
         SupportResistanceBreakoutStrategy(**params.get("support_resistance_breakout", {})),
+        RangeTraderStrategy(**params.get("range_trader", {})),
     ]
+
+    # Apply mtf config to strategies
+    for strat in strategies:
+        cfg = params.get(strat.name.lower(), {}) if strat.name else {}
+        strat.use_mtf_filter = cfg.get("use_mtf_filter", False)
+        strat.mtf_timeframe = cfg.get("mtf_timeframe", "4h")
+        mtf_timeframes.add(strat.mtf_timeframe)
+
+    mtf_context = None
+    if any(getattr(s, "use_mtf_filter", False) for s in strategies):
+        mtf_context = MtfContext(alpaca, PAIRS, list(mtf_timeframes))
 
     # Risk manager
     risk_manager = RiskManager(

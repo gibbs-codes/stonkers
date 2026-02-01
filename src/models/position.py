@@ -38,6 +38,7 @@ class Position:
     exit_reason: str = ""
     stop_loss_price: Optional[Decimal] = None
     take_profit_price: Optional[Decimal] = None
+    signal_id: Optional[int] = None
 
     def __post_init__(self):
         """Validate position data."""

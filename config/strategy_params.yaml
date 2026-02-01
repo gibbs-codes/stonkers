@@ -8,6 +8,8 @@ ema_rsi:
   atr_period: 14
   atr_multiplier_stop: 1.5
   proximity_pct: 0.01
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
 
 ema_cross:
   fast_period: 9
@@ -15,6 +17,8 @@ ema_cross:
   trend_filter_period: 200
   trend_filter_buffer: 0.002
   min_signal_strength: 0.55
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
 
 momentum_thrust:
   roc_period: 10
@@ -22,6 +26,8 @@ momentum_thrust:
   exit_threshold: 1.0
   volume_multiplier: 0.8
   min_signal_strength: 0.5
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
 
 vwap_mean_rev:
   vwap_period: 45
@@ -29,6 +35,8 @@ vwap_mean_rev:
   volume_threshold: 1.0
   min_signal_strength: 0.5
   stretch_factor: 0.8
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
 
 support_resistance_breakout:
   lookback_period: 80
@@ -38,6 +46,21 @@ support_resistance_breakout:
   retest_candles: 5
   retest_tolerance: 0.01
   min_signal_strength: 0.65
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
+
+range_trader:
+  range_lookback: 20
+  support_tolerance: 0.003
+  resistance_tolerance: 0.003
+  min_range_touches: 5
+  adx_period: 14
+  adx_threshold: 20
+  min_signal_strength: 0.55
+  use_mtf_filter: true
+  mtf_timeframe: "4h"
 
 bb_squeeze:
   # defaults unchanged; placeholder for future tuning
+  use_mtf_filter: true
+  mtf_timeframe: "4h"

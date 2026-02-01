@@ -83,7 +83,32 @@ class Database:
                 pnl_pct TEXT NOT NULL,
                 strategy_name TEXT NOT NULL,
                 exit_reason TEXT,
+                signal_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Signal logs for paper/backtest comparison
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS signal_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                pair TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                strength REAL,
+                status TEXT NOT NULL, -- accepted / rejected
+                rejection_reason TEXT,
+                expected_entry_price REAL,
+                actual_entry_price REAL,
+                expected_exit_price REAL,
+                actual_exit_price REAL,
+                quantity REAL,
+                pnl_expected REAL,
+                pnl_actual REAL,
+                slippage REAL,
+                position_id TEXT,
+                notes TEXT
             )
         """)
 
@@ -124,8 +149,8 @@ class Database:
             INSERT INTO positions (
                 id, pair, direction, entry_price, quantity, entry_time,
                 strategy_name, status, exit_price, exit_time, exit_reason,
-                stop_loss_price, take_profit_price
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                stop_loss_price, take_profit_price, signal_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             position.id,
             position.pair,
@@ -140,6 +165,7 @@ class Database:
             position.exit_reason,
             str(position.stop_loss_price) if position.stop_loss_price else None,
             str(position.take_profit_price) if position.take_profit_price else None,
+            position.signal_id,
         ))
         self.conn.commit()
 
@@ -294,7 +320,72 @@ class Database:
             exit_reason=row['exit_reason'] or "",
             stop_loss_price=Decimal(row['stop_loss_price']) if row['stop_loss_price'] else None,
             take_profit_price=Decimal(row['take_profit_price']) if row['take_profit_price'] else None,
+            signal_id=row['signal_id'] if 'signal_id' in row.keys() else None,
         )
+
+    # --- Signal logging helpers ---
+    def insert_signal_log(
+        self,
+        *,
+        timestamp: datetime,
+        pair: str,
+        strategy_name: str,
+        signal_type: str,
+        strength: float,
+        status: str,
+        rejection_reason: str | None = None,
+        expected_entry_price: float | None = None,
+        actual_entry_price: float | None = None,
+        quantity: float | None = None,
+        slippage: float | None = None,
+        position_id: str | None = None,
+    ) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO signal_logs (
+                timestamp, pair, strategy_name, signal_type, strength, status,
+                rejection_reason, expected_entry_price, actual_entry_price,
+                quantity, slippage, position_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timestamp.isoformat(),
+                pair,
+                strategy_name,
+                signal_type,
+                strength,
+                status,
+                rejection_reason,
+                expected_entry_price,
+                actual_entry_price,
+                quantity,
+                slippage,
+                position_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def update_signal_log_exit(
+        self,
+        position_id: str,
+        actual_exit_price: float,
+        pnl_actual: float,
+        pnl_expected: float | None = None,
+        expected_exit_price: float | None = None,
+    ) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE signal_logs
+            SET actual_exit_price = ?, pnl_actual = ?, pnl_expected = COALESCE(pnl_expected, ?),
+                expected_exit_price = COALESCE(expected_exit_price, ?)
+            WHERE position_id = ?
+            """,
+            (actual_exit_price, pnl_actual, pnl_expected, expected_exit_price, position_id),
+        )
+        self.conn.commit()
 
     def close(self):
         """Close database connection."""

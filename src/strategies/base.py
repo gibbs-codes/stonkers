@@ -20,6 +20,9 @@ class Strategy(ABC):
             name: Strategy name for identification
         """
         self.name = name
+        # Optional multi-timeframe filter flags; assigned post-init from config
+        self.use_mtf_filter = False
+        self.mtf_timeframe = "4h"
 
     @abstractmethod
     def analyze(self, candles: List[Candle]) -> Optional[Signal]:
@@ -55,4 +58,19 @@ class Strategy(ABC):
         if len(set(c.pair for c in candles)) > 1:
             raise ValueError("All candles must be for the same trading pair")
 
+        return True
+
+    def check_mtf_alignment(self, signal: Signal, timestamp, mtf_context, timeframe: str = "4h") -> bool:
+        """Return True if signal aligns with higher-timeframe trend or filter disabled."""
+        if not getattr(self, "use_mtf_filter", False):
+            return True
+        if mtf_context is None:
+            return True
+        trend = mtf_context.get_trend(signal.pair, timestamp, timeframe=timeframe)
+        if trend == "neutral":
+            return False
+        if signal.is_long and trend != "bullish":
+            return False
+        if signal.is_short and trend != "bearish":
+            return False
         return True

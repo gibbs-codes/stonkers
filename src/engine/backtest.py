@@ -25,6 +25,7 @@ class BacktestEngine:
         strategies: List[Strategy],
         risk_manager: RiskManager,
         initial_balance: Decimal = Decimal("10000"),
+        mtf_context=None,
     ):
         """Initialize backtest engine.
 
@@ -36,6 +37,7 @@ class BacktestEngine:
         self.strategies = strategies
         self.risk_manager = risk_manager
         self.initial_balance = initial_balance
+        self.mtf_context = mtf_context
 
         # Create temporary database for backtest
         self.db = Database(Path(":memory:"))  # In-memory SQLite
@@ -174,6 +176,25 @@ class BacktestEngine:
                 if not signal:
                     continue
 
+                # Higher timeframe alignment filter
+                if not strategy.check_mtf_alignment(
+                    signal, timestamp, self.mtf_context, getattr(strategy, "mtf_timeframe", "4h")
+                ):
+                    continue
+
+                # Check MTF alignment
+                if not strategy.check_mtf_alignment(
+                    signal, timestamp, self.mtf_context, getattr(strategy, "mtf_timeframe", "4h")
+                ):
+                    if hasattr(self.paper_trader, "log_signal"):
+                        self.paper_trader.log_signal(
+                            signal=signal,
+                            status="rejected",
+                            rejection_reason="mtf_mismatch",
+                            expected_entry_price=candles[-1].close,
+                        )
+                    continue
+
                 # Check risk rules
                 can_open, reason = self.risk_manager.can_open_position(
                     signal=signal,
@@ -182,6 +203,13 @@ class BacktestEngine:
                 )
 
                 if not can_open:
+                    if hasattr(self.paper_trader, "log_signal"):
+                        self.paper_trader.log_signal(
+                            signal=signal,
+                            status="rejected",
+                            rejection_reason=reason,
+                            expected_entry_price=candles[-1].close,
+                        )
                     continue
 
                 # Open position
@@ -192,7 +220,7 @@ class BacktestEngine:
                 )
 
                 position = self.paper_trader.execute_entry(
-                    signal, entry_price, quantity
+                    signal, entry_price, quantity, expected_entry_price=entry_price
                 )
                 self.position_manager.open_position(position)
 

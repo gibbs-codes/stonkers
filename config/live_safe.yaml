@@ -1,0 +1,6 @@
+max_position_pct: 0.10        # 10% per trade
+max_open_positions: 3         # limit concurrent exposure
+stop_loss_pct: 0.015          # 1.5% stop
+max_daily_loss_pct: 0.03      # halt at -3% day
+enabled_strategies:
+  - bollinger_squeeze

@@ -54,11 +54,39 @@ class PaperTrader:
         state = self.db.get_account_state()
         return state["cash"] if state else self.initial_balance
 
+    def log_signal(
+        self,
+        *,
+        signal: Signal,
+        status: str,
+        rejection_reason: str | None = None,
+        expected_entry_price: Decimal | None = None,
+        actual_entry_price: Decimal | None = None,
+        quantity: Decimal | None = None,
+        position_id: str | None = None,
+    ) -> int:
+        """Persist signal decision for later analysis."""
+        return self.db.insert_signal_log(
+            timestamp=signal.timestamp,
+            pair=signal.pair,
+            strategy_name=signal.strategy_name,
+            signal_type=signal.signal_type.value,
+            strength=float(signal.strength),
+            status=status,
+            rejection_reason=rejection_reason,
+            expected_entry_price=float(expected_entry_price) if expected_entry_price else None,
+            actual_entry_price=float(actual_entry_price) if actual_entry_price else None,
+            quantity=float(quantity) if quantity else None,
+            slippage=float(actual_entry_price - expected_entry_price) if expected_entry_price and actual_entry_price else None,
+            position_id=position_id,
+        )
+
     def execute_entry(
         self,
         signal: Signal,
         entry_price: Decimal,
         quantity: Decimal,
+        expected_entry_price: Decimal | None = None,
     ) -> Position:
         """Execute entry order (open new position).
 
@@ -90,6 +118,7 @@ class PaperTrader:
             status=PositionStatus.OPEN,
             stop_loss_price=signal.stop_loss_price,
             take_profit_price=signal.take_profit_price,
+            signal_id=None,
         )
 
         # Update cash (deduct position value)
@@ -103,6 +132,17 @@ class PaperTrader:
             )
 
         self.db.save_account_state(cash=new_cash, equity=self.get_account_value())
+
+        # Log acceptance with actual/expected fills
+        position.signal_id = self.log_signal(
+            signal=signal,
+            status="accepted",
+            rejection_reason=None,
+            expected_entry_price=expected_entry_price,
+            actual_entry_price=entry_price,
+            quantity=quantity,
+            position_id=position.id,
+        )
 
         return position
 
@@ -133,6 +173,21 @@ class PaperTrader:
         new_equity = equity + pnl
 
         self.db.save_account_state(cash=new_cash, equity=new_equity)
+
+        # Log exit to signal_logs if available
+        try:
+            pnl_actual = float(pnl)
+            pnl_expected = None
+            if position.signal_id:
+                self.db.update_signal_log_exit(
+                    position_id=position.id,
+                    actual_exit_price=float(exit_price),
+                    pnl_actual=pnl_actual,
+                    pnl_expected=pnl_expected,
+                    expected_exit_price=None,
+                )
+        except Exception:
+            pass  # logging should never break trading
 
         return position
 
