@@ -36,6 +36,7 @@ class AlpacaConnector:
         pairs: List[str],
         timeframe: TimeFrame = None,
         limit: int = 200,
+        days_back: int = 30,
     ) -> Dict[str, List[Candle]]:
         """Fetch recent candles for given pairs.
 
@@ -43,6 +44,7 @@ class AlpacaConnector:
             pairs: List of trading pairs (e.g., ["BTC/USD", "ETH/USD"])
             timeframe: Timeframe for candles (default 15 minutes)
             limit: Number of candles to fetch (default 200)
+            days_back: How many days of history to request (default 30)
 
         Returns:
             Dict mapping pair -> list of Candles (oldest first)
@@ -54,10 +56,9 @@ class AlpacaConnector:
         # Calculate start/end times
         end = datetime.now(timezone.utc)
 
-        # Calculate start time based on timeframe and limit
-        # For 15-min candles with limit 200, we need ~50 hours of data
-        # Fetch last 7 days to be safe
-        start = end - timedelta(days=7)
+        # Calculate start time based on requested days_back
+        # Keep within provider limits via limit param supplied by caller
+        start = end - timedelta(days=days_back)
 
         # Build request
         request = CryptoBarsRequest(

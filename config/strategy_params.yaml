@@ -2,8 +2,8 @@ ema_rsi:
   # Session 4 fix: Conservative config won A/B test (+$5.16 vs baseline)
   rsi_oversold: 45              # Up from 38 — wait for stronger recovery
   rsi_overbought: 57            # Down from 62 — tighter for shorts
-  min_signal_strength: 0.6
-  max_distance_from_ema_pct: 0.06   # 6% max — avoid extreme dislocations
+  min_signal_strength: 0.65         # tightened to require stronger confluence
+  max_distance_from_ema_pct: 0.05   # 5% max — closer to EMA to avoid chasing
   min_distance_from_ema_pct: 0.006  # 0.6% min — skip noise near EMA (key fix!)
   atr_period: 14
   atr_multiplier_stop: 1.5

@@ -1,4 +1,5 @@
 """Run backtest on historical data."""
+import argparse
 import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -40,6 +41,15 @@ def load_strategy_params(config_file: str = "config/loose_params.yaml") -> dict:
 
 def main():
     """Run backtests on all strategies."""
+    parser = argparse.ArgumentParser(description="Run strategy backtests.")
+    parser.add_argument(
+        "-c",
+        "--config",
+        default="config/loose_params.yaml",
+        help="YAML file with strategy parameters (default: config/loose_params.yaml)",
+    )
+    args = parser.parse_args()
+
     console.print("[bold cyan]═══════════════════════════════════════[/bold cyan]")
     console.print("[bold cyan]   STONKERS BACKTEST RUNNER[/bold cyan]")
     console.print("[bold cyan]═══════════════════════════════════════[/bold cyan]\n")
@@ -87,8 +97,8 @@ def main():
         console.print("[red]No data available. Exiting.[/red]")
         return
 
-    params = load_strategy_params()
-    console.print(f"[dim]Params loaded from: config/loose_params.yaml[/dim]\n")
+    params = load_strategy_params(args.config)
+    console.print(f"[dim]Params loaded from: {args.config}[/dim]\n")
 
     # Initialize strategies (prefer YAML params when provided)
     strategies = [
