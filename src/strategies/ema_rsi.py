@@ -28,6 +28,7 @@ class EmaRsiStrategy(Strategy):
         rsi_overbought: int = 62,
         min_signal_strength: Decimal = Decimal("0.6"),
         max_distance_from_ema_pct: float = 0.06,
+        min_distance_from_ema_pct: float = 0.0,  # NEW: minimum distance filter
         atr_period: int = 14,
         atr_multiplier_stop: float = 1.5,
         proximity_pct: float = 0.01,
@@ -37,12 +38,15 @@ class EmaRsiStrategy(Strategy):
         Args:
             ema_period: Period for trend EMA (default 100)
             rsi_period: Period for RSI calculation (default 14)
-            rsi_oversold: RSI oversold level (default 32)
-            rsi_overbought: RSI overbought level (default 68)
+            rsi_oversold: RSI oversold level (default 38)
+            rsi_overbought: RSI overbought level (default 62)
             min_signal_strength: Minimum strength for signal (0.0-1.0)
-            max_distance_from_ema_pct: Skip trades if price is too far from EMA (default 8%)
+            max_distance_from_ema_pct: Skip trades if price is too far from EMA (default 6%)
+            min_distance_from_ema_pct: Skip trades if price is too close to EMA (default 0%)
+                                       Filters out noise when price is hugging EMA
             atr_period: ATR period (default 14)
             atr_multiplier_stop: ATR-based stop distance multiplier (default 1.5)
+            proximity_pct: Max distance for entry signal (default 1%)
         """
         super().__init__(name="EMA_RSI")
         self.ema_period = ema_period
@@ -55,6 +59,7 @@ class EmaRsiStrategy(Strategy):
             else Decimal(str(min_signal_strength))
         )
         self.max_distance_from_ema_pct = max_distance_from_ema_pct
+        self.min_distance_from_ema_pct = min_distance_from_ema_pct
         self.atr_period = atr_period
         self.atr_multiplier_stop = atr_multiplier_stop
         self.proximity_pct = proximity_pct
@@ -98,6 +103,11 @@ class EmaRsiStrategy(Strategy):
 
         # Avoid catching extreme knives far from EMA
         if distance_pct > self.max_distance_from_ema_pct:
+            return None
+
+        # Skip entries too close to EMA — these are noise, not real dislocations
+        # (Session 4 diagnostic: 0-0.2% distance had 25% win rate vs 75% at 0.6-0.8%)
+        if distance_pct < self.min_distance_from_ema_pct:
             return None
 
         atr = current['atr']
