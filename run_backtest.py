@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from src.connectors.alpaca import AlpacaConnector
+from src.data.historical_data_manager import HistoricalDataManager
 from src.engine.backtest import BacktestEngine
 from src.engine.risk_manager import RiskManager
 from src.strategies.bollinger_squeeze import BollingerSqueezeStrategy
@@ -71,22 +72,25 @@ def main():
     console.print(f"  Starting Balance: ${INITIAL_BALANCE:,}")
     console.print()
 
-    # Download historical data
+    # Download historical data with caching + retries
     console.print("[bold]Downloading historical data...[/bold]")
+    data_manager = HistoricalDataManager(
+        api_key=os.getenv("ALPACA_API_KEY"),
+        secret_key=os.getenv("ALPACA_SECRET_KEY"),
+    )
+
+    candles_by_pair = data_manager.fetch_candles(
+        symbols=PAIRS,
+        timeframe="15m",
+        start=start_date,
+        end=end_date,
+        incremental=True,
+    )
+
     alpaca = AlpacaConnector(
         api_key=os.getenv("ALPACA_API_KEY"),
         secret_key=os.getenv("ALPACA_SECRET_KEY"),
         paper=True,
-    )
-
-    # Fetch enough candles for the date range
-    # 15 minute candles for 30 days = 30 * 24 * 4 = 2,880 candles
-    # Alpaca limits to 10,000, so we have plenty of room
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-    candles_by_pair = alpaca.fetch_recent_candles(
-        pairs=PAIRS,
-        timeframe=TimeFrame(15, TimeFrameUnit.Minute),
-        limit=3000,  # ~31 days of 15-min candles
     )
 
     for pair, candles in candles_by_pair.items():

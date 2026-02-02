@@ -68,8 +68,10 @@ class SupportResistanceBreakoutStrategy(Strategy):
         # Convert to pandas DataFrame
         df = self._candles_to_df(candles)
 
-        # Phase 1: Identify support/resistance levels
-        levels = self._find_support_resistance_levels(df)
+        # Phase 1: Identify support/resistance levels (exclude most recent retest window to avoid bias from breakout bar)
+        level_window = len(df) - (self.retest_candles + 5)
+        levels_df = df.iloc[:level_window] if level_window > 0 else df
+        levels = self._find_support_resistance_levels(levels_df)
 
         if not levels['resistance'] and not levels['support']:
             return None
@@ -180,8 +182,9 @@ class SupportResistanceBreakoutStrategy(Strategy):
         swing_low_indices = self._find_swing_lows(lookback_df)
 
         # Extract price levels
-        resistance_levels = [lookback_df['high'].iloc[i] for i in swing_high_indices]
-        support_levels = [lookback_df['low'].iloc[i] for i in swing_low_indices]
+        # Use closes to anchor levels so they align with observed transaction prices
+        resistance_levels = [lookback_df['close'].iloc[i] for i in swing_high_indices]
+        support_levels = [lookback_df['close'].iloc[i] for i in swing_low_indices]
 
         # Cluster nearby levels
         clustered_resistance = self._cluster_levels(resistance_levels)
@@ -222,16 +225,14 @@ class SupportResistanceBreakoutStrategy(Strategy):
         for level in resistance_levels:
             # Find breakout candle (close above level with volume)
             breakout_idx = None
-            for i in range(len(recent_df) - self.retest_candles, len(recent_df) - 2):
-                if i < 1:
-                    continue
-
+            # scan the recent window while leaving at least two candles after breakout
+            for i in range(1, len(recent_df) - 2):
                 candle = recent_df.iloc[i]
                 prev_candle = recent_df.iloc[i-1]
 
-                # Breakout: previous close below, current close above
-                if (prev_candle['close'] <= level and
-                    candle['close'] > level and
+                # Breakout: previous high below level, current high pierces level (close can be modest)
+                if (prev_candle['high'] <= level and
+                    candle['high'] > level and
                     candle['volume'] > candle['avg_volume'] * self.volume_multiplier):
                     breakout_idx = i
                     break
@@ -241,12 +242,13 @@ class SupportResistanceBreakoutStrategy(Strategy):
 
             # Look for retest after breakout (within retest_candles)
             retest_idx = None
-            for i in range(breakout_idx + 1, min(breakout_idx + self.retest_candles, len(recent_df))):
+            for i in range(breakout_idx + 1, min(breakout_idx + self.retest_candles + 1, len(recent_df))):
                 candle = recent_df.iloc[i]
 
-                # Retest: price pulls back close to level (within tolerance)
+                # Retest: price pulls back close to level (within tolerance) with a genuine dip
                 retest_distance = abs(candle['low'] - level) / level
-                if retest_distance <= self.retest_tolerance:
+                pulled_back = candle['close'] <= level * (1 + self.retest_tolerance) and candle['close'] < recent_df.iloc[breakout_idx]['close']
+                if retest_distance <= self.retest_tolerance and pulled_back:
                     retest_idx = i
                     break
 
@@ -319,16 +321,13 @@ class SupportResistanceBreakoutStrategy(Strategy):
         for level in support_levels:
             # Find breakdown candle (close below level with volume)
             breakdown_idx = None
-            for i in range(len(recent_df) - self.retest_candles, len(recent_df) - 2):
-                if i < 1:
-                    continue
-
+            for i in range(1, len(recent_df) - 2):
                 candle = recent_df.iloc[i]
                 prev_candle = recent_df.iloc[i-1]
 
-                # Breakdown: previous close above, current close below
-                if (prev_candle['close'] >= level and
-                    candle['close'] < level and
+                # Breakdown: previous low above level, current low pierces level
+                if (prev_candle['low'] >= level and
+                    candle['low'] < level and
                     candle['volume'] > candle['avg_volume'] * self.volume_multiplier):
                     breakdown_idx = i
                     break
@@ -338,12 +337,13 @@ class SupportResistanceBreakoutStrategy(Strategy):
 
             # Look for retest after breakdown
             retest_idx = None
-            for i in range(breakdown_idx + 1, min(breakdown_idx + self.retest_candles, len(recent_df))):
+            for i in range(breakdown_idx + 1, min(breakdown_idx + self.retest_candles + 1, len(recent_df))):
                 candle = recent_df.iloc[i]
 
-                # Retest: price rallies back close to level (within tolerance)
+                # Retest: price rallies back close to level (within tolerance) with genuine bounce up
                 retest_distance = abs(candle['high'] - level) / level
-                if retest_distance <= self.retest_tolerance:
+                rallied = candle['close'] >= level * (1 - self.retest_tolerance) and candle['close'] > recent_df.iloc[breakdown_idx]['close']
+                if retest_distance <= self.retest_tolerance and rallied:
                     retest_idx = i
                     break
 

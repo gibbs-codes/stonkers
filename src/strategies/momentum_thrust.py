@@ -116,7 +116,7 @@ class MomentumThrustStrategy(Strategy):
             )
 
         # LONG fallback: sustained thrust (current and previous two candles above threshold)
-        if all(recent['roc'] > self.entry_threshold):
+        if volume_spike and all(recent['roc'] > self.entry_threshold):
             roc_strength = min(1.0, current_roc / (self.entry_threshold * 2))
             strength = Decimal(str(max(self.min_signal_strength, roc_strength)))
             volume_ratio = current_volume / avg_volume
@@ -165,7 +165,7 @@ class MomentumThrustStrategy(Strategy):
             )
 
         # SHORT fallback: sustained thrust down (current and previous two candles below -threshold)
-        if all(recent['roc'] < -self.entry_threshold):
+        if volume_spike and all(recent['roc'] < -self.entry_threshold):
             roc_strength = min(1.0, abs(current_roc) / (self.entry_threshold * 2))
             strength = Decimal(str(max(self.min_signal_strength, roc_strength)))
             volume_ratio = current_volume / avg_volume
