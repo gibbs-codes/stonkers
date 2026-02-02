@@ -57,7 +57,7 @@ strategies:
     enabled: true  # Backtest (30d): +8.04%, 43.9% win rate, 1.67 PF ✅ TOP PERFORMER
     params:
       rsi_period: 14
-      lookback_periods: 14
+      lookback: 14
       min_signal_strength: 0.7
 
   momentum_thrust:
