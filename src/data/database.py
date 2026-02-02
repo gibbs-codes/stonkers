@@ -50,8 +50,8 @@ class Database:
             )
         """)
 
-        # Backwards-compat: add stop/take columns if table already existed
-        for column in ("stop_loss_price", "take_profit_price"):
+        # Backwards-compat: add columns if table already existed
+        for column in ("stop_loss_price", "take_profit_price", "signal_id"):
             try:
                 cursor.execute(f"ALTER TABLE positions ADD COLUMN {column} TEXT")
             except sqlite3.OperationalError:

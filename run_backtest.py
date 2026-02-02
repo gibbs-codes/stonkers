@@ -109,14 +109,23 @@ def main():
     # Collect timeframes needed for MTF filter
     mtf_timeframes = set()
 
+    # Helper to filter out MTF params that are set separately
+    def strategy_params(key: str) -> dict:
+        p = params.get(key, {}).copy()
+        p.pop("use_mtf_filter", None)
+        p.pop("mtf_timeframe", None)
+        return p
+
     # Initialize strategies (prefer YAML params when provided)
     strategies = [
-        EmaCrossoverStrategy(**params.get("ema_cross", {})),
-        BollingerSqueezeStrategy(**(params.get("bb_squeeze") or {})),
-        MomentumThrustStrategy(**params.get("momentum_thrust", {})),
-        VwapMeanReversionStrategy(**params.get("vwap_mean_rev", {})),
-        SupportResistanceBreakoutStrategy(**params.get("support_resistance_breakout", {})),
-        RangeTraderStrategy(**params.get("range_trader", {})),
+        EmaRsiStrategy(**strategy_params("ema_rsi")),
+        EmaCrossoverStrategy(**strategy_params("ema_cross")),
+        BollingerSqueezeStrategy(**strategy_params("bb_squeeze")),
+        MomentumThrustStrategy(**strategy_params("momentum_thrust")),
+        VwapMeanReversionStrategy(**strategy_params("vwap_mean_rev")),
+        SupportResistanceBreakoutStrategy(**strategy_params("support_resistance_breakout")),
+        RangeTraderStrategy(**strategy_params("range_trader")),
+        RsiDivergenceStrategy(**strategy_params("rsi_divergence")),
     ]
 
     # Apply mtf config to strategies

@@ -93,7 +93,7 @@ class HistoricalDataManager:
         self._request_times: deque = deque()
 
         self.data_client = data_client or CryptoHistoricalDataClient(
-            api_key, secret_key, base_url=base_url
+            api_key, secret_key
         )
 
     # Public API -----------------------------------------------------------------

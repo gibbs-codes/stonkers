@@ -30,7 +30,7 @@ logging:
 
 strategies:
   ema_rsi:
-    enabled: false  # Backtest (30d): -1.55%, 20% win rate - DISABLED
+    enabled: true  # Backtest (30d): +1.65%, 54.7% win rate, 1.42 PF, 0.52% max DD ✅
     params:
       ema_period: 100
       rsi_period: 14
@@ -39,14 +39,14 @@ strategies:
       min_signal_strength: 0.6
 
   ema_crossover:
-    enabled: false  # Backtest (30d): -1.64%, 0% win rate - DISABLED ❌
+    enabled: true  # Backtest (30d): +4.67%, 40% win rate, 1.56 PF ✅
     params:
       fast_period: 9
       slow_period: 21
       min_signal_strength: 0.6
 
   bollinger_squeeze:
-    enabled: true  # Backtest (30d): +0.88%, 66.7% win rate, 3.16 PF ✅ WINNER
+    enabled: true  # Backtest (30d): +2.93%, 37.8% win rate, 1.25 PF ✅
     params:
       bb_period: 20
       bb_std: 2.0
@@ -54,14 +54,14 @@ strategies:
       min_signal_strength: 0.6
 
   rsi_divergence:
-    enabled: false  # Backtest (30d): -1.51%, 0% win rate - DISABLED
+    enabled: true  # Backtest (30d): +8.04%, 43.9% win rate, 1.67 PF ✅ TOP PERFORMER
     params:
       rsi_period: 14
       lookback_periods: 14
       min_signal_strength: 0.7
 
   momentum_thrust:
-    enabled: false  # Backtest (30d): 0 trades, too strict - DISABLED until tuned
+    enabled: false  # Backtest (30d): -1.24%, 30.6% win rate, 0.91 PF - DISABLED
     params:
       roc_period: 14
       entry_threshold: 5.0
@@ -70,7 +70,7 @@ strategies:
       min_signal_strength: 0.6
 
   vwap_mean_reversion:
-    enabled: false  # Backtest (30d): 0 trades, too strict - DISABLED until tuned
+    enabled: true  # Backtest (30d): +2.56%, 37.3% win rate, 1.54 PF, 1.17% max DD ✅
     params:
       vwap_period: 50
       std_multiplier: 2.0
@@ -78,7 +78,7 @@ strategies:
       min_signal_strength: 0.6
 
   support_resistance_breakout:
-    enabled: false  # Backtest (30d): 0 trades, too strict - DISABLED until tuned
+    enabled: false  # Backtest (30d): +0.10%, 28.6% win rate, 1.01 PF - marginal
     params:
       lookback_period: 100
       level_tolerance: 0.01
