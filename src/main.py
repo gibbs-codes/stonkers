@@ -79,12 +79,12 @@ def main():
 
     # Map strategy names to classes
     strategy_map = {
-        "ema_rsi": (EmaRsiStrategy, ["ema_period", "rsi_period", "rsi_oversold", "rsi_overbought", "min_signal_strength"]),
-        "ema_crossover": (EmaCrossoverStrategy, ["fast_period", "slow_period", "min_signal_strength"]),
+        "ema_rsi": (EmaRsiStrategy, ["ema_period", "rsi_period", "rsi_oversold", "rsi_overbought", "min_signal_strength", "proximity_pct", "max_distance_from_ema_pct", "min_distance_from_ema_pct"]),
+        "ema_crossover": (EmaCrossoverStrategy, ["fast_period", "slow_period", "min_signal_strength", "trend_filter_period", "trend_filter_buffer"]),
         "bollinger_squeeze": (BollingerSqueezeStrategy, ["bb_period", "bb_std", "squeeze_threshold", "min_signal_strength"]),
         "rsi_divergence": (RsiDivergenceStrategy, ["rsi_period", "lookback", "min_signal_strength"]),
         "momentum_thrust": (MomentumThrustStrategy, ["roc_period", "entry_threshold", "exit_threshold", "volume_multiplier", "min_signal_strength"]),
-        "vwap_mean_reversion": (VwapMeanReversionStrategy, ["vwap_period", "std_multiplier", "volume_threshold", "min_signal_strength"]),
+        "vwap_mean_reversion": (VwapMeanReversionStrategy, ["vwap_period", "std_multiplier", "volume_threshold", "min_signal_strength", "stretch_factor"]),
         "support_resistance_breakout": (SupportResistanceBreakoutStrategy, ["lookback_period", "level_tolerance", "min_touches", "volume_multiplier", "retest_candles", "retest_tolerance", "min_signal_strength"]),
     }
 
