@@ -172,6 +172,11 @@ class TradingEngine:
                     signal, entry_price, quantity
                 )
 
+                # Check if entry succeeded
+                if position is None:
+                    console.print(f"[red]Entry execution failed for {pair}[/red]")
+                    continue
+
                 # Open position in manager
                 self.position_manager.open_position(position)
 

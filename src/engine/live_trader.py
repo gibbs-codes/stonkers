@@ -1,11 +1,14 @@
 """Live trader for executing real trades via Alpaca API."""
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from rich.console import Console
 
 from src.connectors.alpaca import AlpacaConnector
-from src.models.position import Position
+from src.models.position import Position, Direction, PositionStatus
+from src.models.signal import Signal, SignalType
 
 console = Console()
 
@@ -49,42 +52,71 @@ class LiveTrader:
             console.print(f"[red]Error getting cash balance: {e}[/red]")
             return Decimal("0")
 
-    def execute_entry(self, position: Position, price: Decimal) -> bool:
-        """Execute entry order for a position.
+    def execute_entry(
+        self,
+        signal: Signal,
+        entry_price: Decimal,
+        quantity: Decimal,
+    ) -> Optional[Position]:
+        """Execute entry order for a signal.
 
         Args:
-            position: Position to enter
-            price: Current market price
+            signal: Trading signal
+            entry_price: Price to enter at
+            quantity: Quantity to trade
 
         Returns:
-            True if order executed successfully
+            Position if order executed successfully, None otherwise
         """
         try:
-            # Determine side
-            side = "buy" if position.direction.value == "long" else "sell"
+            # Determine direction from signal type
+            if signal.signal_type == SignalType.ENTRY_LONG:
+                direction = Direction.LONG
+                side = "buy"
+            elif signal.signal_type == SignalType.ENTRY_SHORT:
+                direction = Direction.SHORT
+                side = "sell"
+            else:
+                console.print(f"[red]Invalid signal type for entry: {signal.signal_type}[/red]")
+                return None
 
             # Place market order
             console.print(
                 f"[bold yellow]PLACING LIVE ORDER:[/bold yellow] "
-                f"{side.upper()} {position.quantity} {position.pair} @ ${price}"
+                f"{side.upper()} {quantity} {signal.pair} @ ${entry_price}"
             )
 
             order = self.alpaca.place_market_order(
-                symbol=position.pair,
-                qty=position.quantity,
+                symbol=signal.pair,
+                qty=quantity,
                 side=side
             )
 
             if order:
                 console.print(f"[bold green]✓ Order placed:[/bold green] {order.id}")
-                return True
+
+                # Create position object to return
+                position = Position(
+                    id=f"pos_{uuid.uuid4().hex[:8]}",
+                    pair=signal.pair,
+                    direction=direction,
+                    entry_price=entry_price,
+                    quantity=quantity,
+                    entry_time=datetime.now(timezone.utc),
+                    strategy_name=signal.strategy_name,
+                    status=PositionStatus.OPEN,
+                    stop_loss_price=signal.stop_loss_price,
+                    take_profit_price=signal.take_profit_price,
+                    signal_id=None,
+                )
+                return position
             else:
                 console.print("[bold red]✗ Order failed[/bold red]")
-                return False
+                return None
 
         except Exception as e:
             console.print(f"[bold red]Error placing order: {e}[/bold red]")
-            return False
+            return None
 
     def execute_exit(self, position: Position, price: Decimal) -> bool:
         """Execute exit order for a position.
