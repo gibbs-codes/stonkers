@@ -1,5 +1,5 @@
 # .github/workflows/deploy.yml
-name: Deploy Stonkers Trading Bot to Mac Mini
+name: Deploy Stonkers Trading Bot to Raspberry Pi 5
 
 on:
   push:
@@ -12,18 +12,18 @@ env:
 jobs:
   deploy:
     runs-on: self-hosted
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Configure Docker environment
       run: |
         echo "Setting up Docker environment for ${{ github.repository }}..."
-        
+
         # Create Docker config directory
         mkdir -p ~/.docker
-        
+
         # Create config without keychain
         cat > ~/.docker/config.json << 'EOF'
         {
@@ -33,14 +33,17 @@ jobs:
           "experimental": "disabled"
         }
         EOF
-        
+
         # Ensure shared network exists
         docker network create gibbs-apps 2>/dev/null || echo "Network already exists"
-        
+
         # Test Docker access
         echo "Testing Docker access..."
         docker --version
-        
+
+        # Show system info (useful for debugging ARM64 issues)
+        echo "System architecture: $(uname -m)"
+
     - name: Set up deployment directory
       run: |
         DEPLOY_DIR=~/deployments/${{ env.APP_NAME }}
@@ -65,51 +68,53 @@ jobs:
 
         echo "Copying new code..."
         cp -r $GITHUB_WORKSPACE/* $DEPLOY_DIR/
-        
+
     - name: Copy secrets
       run: |
         DEPLOY_DIR=~/deployments/${{ env.APP_NAME }}
         APP_SECRETS=~/secrets/${{ env.APP_NAME }}
-        
+
         echo "Copying environment file..."
         if [ -f "$APP_SECRETS/production.env" ]; then
           cp $APP_SECRETS/production.env $DEPLOY_DIR/.env
-          echo "✅ Environment file copied as .env"
+          echo "Environment file copied as .env"
         else
-          echo "❌ Environment file not found at $APP_SECRETS/production.env"
+          echo "Environment file not found at $APP_SECRETS/production.env"
           exit 1
         fi
-        
+
     - name: Build and start container
       env:
         DOCKER_CONFIG: ~/.docker
         DOCKER_BUILDKIT: 0
       run: |
         cd ~/deployments/${{ env.APP_NAME }}
-        echo "Building Stonkers Trading Bot..."
+        echo "Building Stonkers Trading Bot for ARM64..."
 
         # Stop any existing container
         docker stop stonkers-production 2>/dev/null || true
         docker rm stonkers-production 2>/dev/null || true
 
-        # Build the image
+        # Build the image (ARM64 native on Pi 5)
         docker build --no-cache -t stonkers:latest .
 
-        # Run the container with shared network
+        # Run the container with resource limits appropriate for Pi 5
         docker run -d \
           --name stonkers-production \
           --restart unless-stopped \
           --network gibbs-apps \
+          --memory=1g \
+          --memory-swap=2g \
           -v $(pwd)/logs:/usr/src/app/logs:rw \
           -v $(pwd)/data:/usr/src/app/data:rw \
           --env-file .env \
           -e PAPER_TRADING=true \
           stonkers:latest
-        
+
     - name: Verify deployment
       run: |
         echo "Waiting for container to start..."
-        sleep 10
+        sleep 15
 
         echo "Checking container status..."
         docker ps | grep stonkers-production
@@ -120,29 +125,31 @@ jobs:
         echo "Showing recent logs..."
         docker logs --tail 50 stonkers-production
 
-        echo "✅ Stonkers deployment successful!"
-        
+        echo "Stonkers deployment successful!"
+
     - name: Clean up old images
       run: |
         docker image prune -f --filter label=app=stonkers || true
+        # Clean up dangling images to save space on Pi
+        docker image prune -f || true
 
     - name: Show final status
       run: |
-        echo "=== 💎 STONKERS DEPLOYMENT STATUS ==="
-        echo "🎉 STONKERS TRADING BOT DEPLOYED! 🎉"
+        echo "=== STONKERS DEPLOYMENT STATUS ==="
+        echo "STONKERS TRADING BOT DEPLOYED ON RASPBERRY PI 5!"
         echo ""
         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep stonkers-production || docker ps
         echo ""
-        echo "💎 Your Automated Trading Bot:"
-        echo "  ⚡ Mode: Alpaca Paper API (Real API, Fake Money)"
-        echo "  💰 Account Balance: Uses Alpaca paper account balance"
-        echo "  📈 Pairs: ETH/USD, SOL/USD"
-        echo "  🤖 Strategy: Bollinger Squeeze (66.7% win rate)"
-        echo "  📁 Logs: ~/deployments/stonkers/logs/"
-        echo "  💾 Database: ~/deployments/stonkers/data/stonkers.db"
+        echo "Your Automated Trading Bot:"
+        echo "  Platform: Raspberry Pi 5 (ARM64)"
+        echo "  Mode: Alpaca Paper API (Real API, Fake Money)"
+        echo "  Account Balance: Uses Alpaca paper account balance"
+        echo "  Pairs: ETH/USD, SOL/USD"
+        echo "  Strategies: EMA_RSI, EMA_CROSS, BB_SQUEEZE, RSI_DIV, VWAP_MEAN_REV"
+        echo "  Logs: ~/deployments/stonkers/logs/"
+        echo "  Database: ~/deployments/stonkers/data/stonkers.db"
         echo ""
-        echo "🔄 Network: gibbs-apps"
-        docker network inspect gibbs-apps --format='{{range .Containers}}  📦 {{.Name}}: {{.IPv4Address}}{{"\n"}}{{end}}' | grep stonkers || echo "  📦 stonkers-production: Connected"
+        echo "Network: gibbs-apps"
+        docker network inspect gibbs-apps --format='{{range .Containers}}  {{.Name}}: {{.IPv4Address}}{{"\n"}}{{end}}' | grep stonkers || echo "  stonkers-production: Connected"
         echo ""
-        echo "📊 Check logs: docker logs -f stonkers-production"
-        echo "🎯 STONKS ONLY GO UP! 🚀"
+        echo "Check logs: docker logs -f stonkers-production"
