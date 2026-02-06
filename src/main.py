@@ -9,6 +9,7 @@ from rich.console import Console
 
 from src.config.settings import Config
 from src.connectors.alpaca import AlpacaConnector
+from src.dashboard import init_dashboard, start_dashboard
 from src.data.database import Database
 from src.engine.live_trader import LiveTrader
 from src.engine.paper_trader import PaperTrader
@@ -114,9 +115,16 @@ def main():
         trader=trader,
     )
 
+    # Start web dashboard
+    DASHBOARD_PORT = 3004
+    init_dashboard(db, trader, strategies, config)
+    start_dashboard(port=DASHBOARD_PORT)
+    console.print(f"[bold green]✓ Dashboard started on port {DASHBOARD_PORT}[/bold green]")
+
     console.print("[bold green]✓ All components initialized[/bold green]\n")
     console.print(f"Trading pairs: {', '.join(PAIRS)}")
-    console.print(f"Loop interval: {LOOP_INTERVAL}s\n")
+    console.print(f"Loop interval: {LOOP_INTERVAL}s")
+    console.print(f"Dashboard: http://localhost:{DASHBOARD_PORT}\n")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
     # Main loop

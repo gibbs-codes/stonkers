@@ -105,6 +105,7 @@ jobs:
           --network gibbs-apps \
           --memory=1g \
           --memory-swap=2g \
+          -p 3004:3004 \
           -v $(pwd)/logs:/usr/src/app/logs:rw \
           -v $(pwd)/data:/usr/src/app/data:rw \
           --env-file .env \
@@ -146,6 +147,7 @@ jobs:
         echo "  Account Balance: Uses Alpaca paper account balance"
         echo "  Pairs: ETH/USD, SOL/USD"
         echo "  Strategies: EMA_RSI, EMA_CROSS, BB_SQUEEZE, RSI_DIV, VWAP_MEAN_REV"
+        echo "  Dashboard: http://$(hostname -I | awk '{print $1}'):3004"
         echo "  Logs: ~/deployments/stonkers/logs/"
         echo "  Database: ~/deployments/stonkers/data/stonkers.db"
         echo ""
@@ -153,3 +155,4 @@ jobs:
         docker network inspect gibbs-apps --format='{{range .Containers}}  {{.Name}}: {{.IPv4Address}}{{"\n"}}{{end}}' | grep stonkers || echo "  stonkers-production: Connected"
         echo ""
         echo "Check logs: docker logs -f stonkers-production"
+        echo "Dashboard:  http://$(hostname -I | awk '{print $1}'):3004"

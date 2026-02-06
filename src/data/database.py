@@ -387,6 +387,34 @@ class Database:
         )
         self.conn.commit()
 
+    def get_recent_trades(self, limit: int = 10) -> list:
+        """Get recent closed trades.
+
+        Args:
+            limit: Maximum number of trades to return
+
+        Returns:
+            List of trade dicts with pair, direction, pnl, pnl_pct
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT pair, direction, pnl, pnl_pct, exit_time
+            FROM trades
+            ORDER BY exit_time DESC
+            LIMIT ?
+        """, (limit,))
+
+        trades = []
+        for row in cursor.fetchall():
+            trades.append({
+                'pair': row['pair'],
+                'direction': row['direction'],
+                'pnl': Decimal(row['pnl']),
+                'pnl_pct': Decimal(row['pnl_pct']),
+                'exit_time': row['exit_time'],
+            })
+        return trades
+
     def close(self):
         """Close database connection."""
         self.conn.close()
