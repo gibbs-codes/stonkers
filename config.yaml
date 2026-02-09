@@ -34,18 +34,19 @@ strategies:
     params:
       ema_period: 100
       rsi_period: 14
-      rsi_oversold: 30
-      rsi_overbought: 70
-      min_signal_strength: 0.6
-      proximity_pct: 0.05          # 5% - loosened from default 1% to allow more signals
-      max_distance_from_ema_pct: 0.08  # 8% max distance from EMA
+      rsi_oversold: 45             # Matches backtest (was 30 — too extreme, rarely triggers)
+      rsi_overbought: 57           # Matches backtest (was 70 — too extreme, rarely triggers)
+      min_signal_strength: 0.65    # Matches backtest
+      proximity_pct: 0.01          # Matches backtest (tighter = higher quality entries)
+      max_distance_from_ema_pct: 0.05  # Matches backtest (was 0.08)
+      min_distance_from_ema_pct: 0.006 # Matches backtest — filters noise near EMA
 
   ema_crossover:
     enabled: true  # Backtest (30d): +4.67%, 40% win rate, 1.56 PF ✅
     params:
       fast_period: 9
       slow_period: 21
-      min_signal_strength: 0.6
+      min_signal_strength: 0.55   # Matches backtest default (was 0.6)
 
   bollinger_squeeze:
     enabled: true  # Backtest (30d): +2.93%, 37.8% win rate, 1.25 PF ✅
@@ -59,7 +60,7 @@ strategies:
     enabled: true  # Backtest (30d): +8.04%, 43.9% win rate, 1.67 PF ✅ TOP PERFORMER
     params:
       rsi_period: 14
-      lookback: 14
+      lookback: 10                 # Matches backtest default (was 14)
       min_signal_strength: 0.7
 
   momentum_thrust:
