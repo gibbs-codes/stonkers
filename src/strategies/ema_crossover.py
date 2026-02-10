@@ -128,6 +128,43 @@ class EmaCrossoverStrategy(Strategy):
 
         return None
 
+    def diagnostics(self, candles: List[Candle]) -> dict:
+        """Return current indicator values and condition statuses for debugging."""
+        min_required = max(self.slow_period, self.trend_filter_period) + 2
+        if not candles or len(candles) < min_required:
+            return {"status": f"need {min_required} candles, have {len(candles) if candles else 0}"}
+
+        df = self._candles_to_df(candles)
+        df['fast_ema'] = df['close'].ewm(span=self.fast_period, adjust=False).mean()
+        df['slow_ema'] = df['close'].ewm(span=self.slow_period, adjust=False).mean()
+        df['trend_ema'] = df['close'].ewm(span=self.trend_filter_period, adjust=False).mean()
+
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        price = current['close']
+        fast = current['fast_ema']
+        slow = current['slow_ema']
+        prev_fast = previous['fast_ema']
+        prev_slow = previous['slow_ema']
+        trend = current['trend_ema']
+
+        golden_cross = prev_fast <= prev_slow and fast > slow
+        death_cross = prev_fast >= prev_slow and fast < slow
+        long_trend = price > trend * (1 + self.trend_filter_buffer)
+        short_trend = price < trend * (1 - self.trend_filter_buffer)
+
+        return {
+            "price": f"${price:.2f}",
+            "fast_ema": f"${fast:.2f}",
+            "slow_ema": f"${slow:.2f}",
+            "ema_gap": f"${fast - slow:.2f} ({'fast>slow' if fast > slow else 'fast<slow'})",
+            "trend_ema": f"${trend:.2f}",
+            "golden_cross": f"{'PASS' if golden_cross else 'FAIL'} (fast must cross above slow)",
+            "death_cross": f"{'PASS' if death_cross else 'FAIL'} (fast must cross below slow)",
+            "long_trend": f"{'PASS' if long_trend else 'FAIL'} (price must be >{self.trend_filter_buffer:.1%} above trend)",
+            "short_trend": f"{'PASS' if short_trend else 'FAIL'} (price must be >{self.trend_filter_buffer:.1%} below trend)",
+        }
+
     def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
         """Convert candles to pandas DataFrame.
 
