@@ -1,10 +1,11 @@
-"""Simple web dashboard for Stonkers trading bot."""
+"""Web dashboard for Stonkers trading bot (PWA-enabled)."""
+import os
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from flask import Flask, render_template_string
+from flask import Flask, jsonify, send_from_directory
 
 # Dashboard will be initialized with these references
 _db = None
@@ -12,158 +13,21 @@ _trader = None
 _strategies = None
 _config = None
 
-app = Flask(__name__)
+# Resolve static directory relative to this file's location
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
 
-# Simple HTML template - all in one file, no external dependencies
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Stonkers Dashboard</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="refresh" content="60">
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            padding: 20px;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        h1 { color: #00d4ff; margin-bottom: 20px; }
-        h2 { color: #888; font-size: 14px; text-transform: uppercase; margin: 20px 0 10px; }
-        .card {
-            background: #16213e;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-        .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333; }
-        .stat:last-child { border-bottom: none; }
-        .stat-label { color: #888; }
-        .stat-value { font-weight: bold; }
-        .positive { color: #00ff88; }
-        .negative { color: #ff4757; }
-        .neutral { color: #ffa502; }
-        .position {
-            background: #1e3a5f;
-            border-radius: 6px;
-            padding: 12px;
-            margin-bottom: 10px;
-        }
-        .position-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
-        .position-pair { font-weight: bold; font-size: 16px; }
-        .long { color: #00ff88; }
-        .short { color: #ff4757; }
-        .strategy-list { display: flex; flex-wrap: wrap; gap: 8px; }
-        .strategy-tag {
-            background: #2d4a6f;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        .strategy-tag.enabled { background: #1e5128; }
-        .strategy-tag.disabled { background: #4a1e1e; opacity: 0.6; }
-        .timestamp { color: #666; font-size: 12px; text-align: center; margin-top: 20px; }
-        .no-data { color: #666; font-style: italic; }
-    </style>
-</head>
-<body>
-    <h1>Stonkers Dashboard</h1>
-
-    <h2>Account</h2>
-    <div class="card">
-        <div class="stat">
-            <span class="stat-label">Cash Balance</span>
-            <span class="stat-value">${{ "%.2f"|format(cash) }}</span>
-        </div>
-        <div class="stat">
-            <span class="stat-label">Total Equity</span>
-            <span class="stat-value">${{ "%.2f"|format(equity) }}</span>
-        </div>
-        <div class="stat">
-            <span class="stat-label">Mode</span>
-            <span class="stat-value {{ 'neutral' if paper_mode else 'negative' }}">
-                {{ 'Paper Trading' if paper_mode else 'LIVE TRADING' }}
-            </span>
-        </div>
-    </div>
-
-    <h2>Open Positions ({{ positions|length }})</h2>
-    <div class="card">
-        {% if positions %}
-            {% for pos in positions %}
-            <div class="position">
-                <div class="position-header">
-                    <span class="position-pair">{{ pos.pair }}</span>
-                    <span class="{{ 'long' if pos.direction == 'long' else 'short' }}">
-                        {{ pos.direction|upper }}
-                    </span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Entry Price</span>
-                    <span class="stat-value">${{ "%.2f"|format(pos.entry_price) }}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Quantity</span>
-                    <span class="stat-value">{{ "%.4f"|format(pos.quantity) }}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Strategy</span>
-                    <span class="stat-value">{{ pos.strategy }}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Opened</span>
-                    <span class="stat-value">{{ pos.entry_time }}</span>
-                </div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <p class="no-data">No open positions</p>
-        {% endif %}
-    </div>
-
-    <h2>Recent Trades ({{ trades|length }})</h2>
-    <div class="card">
-        {% if trades %}
-            {% for trade in trades %}
-            <div class="stat">
-                <span class="stat-label">
-                    {{ trade.pair }} {{ trade.direction|upper }}
-                </span>
-                <span class="stat-value {{ 'positive' if trade.pnl >= 0 else 'negative' }}">
-                    ${{ "%.2f"|format(trade.pnl) }} ({{ "%.1f"|format(trade.pnl_pct) }}%)
-                </span>
-            </div>
-            {% endfor %}
-        {% else %}
-            <p class="no-data">No recent trades</p>
-        {% endif %}
-    </div>
-
-    <h2>Strategies</h2>
-    <div class="card">
-        <div class="strategy-list">
-            {% for strat in strategies %}
-            <span class="strategy-tag {{ 'enabled' if strat.enabled else 'disabled' }}">
-                {{ strat.name }}
-            </span>
-            {% endfor %}
-        </div>
-    </div>
-
-    <p class="timestamp">Last updated: {{ timestamp }} (auto-refreshes every 60s)</p>
-</body>
-</html>
-"""
+app = Flask(__name__, static_folder=_static_dir, static_url_path='/static')
 
 
 @app.route("/")
-def dashboard():
-    """Render the dashboard."""
-    # Get account info
+def index():
+    """Serve the PWA dashboard."""
+    return send_from_directory(_static_dir, 'index.html')
+
+
+@app.route("/api/dashboard")
+def api_dashboard():
+    """JSON API endpoint for dashboard data (used by the PWA frontend)."""
     cash = Decimal("0")
     equity = Decimal("0")
     paper_mode = True
@@ -219,16 +83,15 @@ def dashboard():
                 'enabled': True,
             })
 
-    return render_template_string(
-        DASHBOARD_HTML,
-        cash=float(cash),
-        equity=float(equity),
-        paper_mode=paper_mode,
-        positions=positions,
-        trades=trades,
-        strategies=strategy_list,
-        timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
-    )
+    return jsonify({
+        'cash': float(cash),
+        'equity': float(equity),
+        'paper_mode': paper_mode,
+        'positions': positions,
+        'trades': trades,
+        'strategies': strategy_list,
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+    })
 
 
 @app.route("/health")
@@ -239,7 +102,7 @@ def health():
 
 @app.route("/api/status")
 def api_status():
-    """JSON API endpoint for status."""
+    """JSON API endpoint for status (legacy)."""
     cash = Decimal("0")
     equity = Decimal("0")
 

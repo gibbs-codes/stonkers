@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="24" fill="#1a1a2e"/>
+  <rect x="16" y="16" width="160" height="160" rx="16" fill="#16213e"/>
+  <!-- Chart grid lines -->
+  <line x1="40" y1="140" x2="152" y2="140" stroke="#333" stroke-width="1"/>
+  <line x1="40" y1="110" x2="152" y2="110" stroke="#333" stroke-width="1"/>
+  <line x1="40" y1="80" x2="152" y2="80" stroke="#333" stroke-width="1"/>
+  <line x1="40" y1="50" x2="152" y2="50" stroke="#333" stroke-width="1"/>
+  <!-- Candlesticks -->
+  <!-- Candle 1 - red -->
+  <line x1="52" y1="60" x2="52" y2="120" stroke="#ff4757" stroke-width="2"/>
+  <rect x="46" y="70" width="12" height="30" fill="#ff4757" rx="1"/>
+  <!-- Candle 2 - green -->
+  <line x1="72" y1="50" x2="72" y2="110" stroke="#00ff88" stroke-width="2"/>
+  <rect x="66" y="55" width="12" height="35" fill="#00ff88" rx="1"/>
+  <!-- Candle 3 - red -->
+  <line x1="92" y1="65" x2="92" y2="130" stroke="#ff4757" stroke-width="2"/>
+  <rect x="86" y="75" width="12" height="40" fill="#ff4757" rx="1"/>
+  <!-- Candle 4 - green -->
+  <line x1="112" y1="45" x2="112" y2="105" stroke="#00ff88" stroke-width="2"/>
+  <rect x="106" y="50" width="12" height="30" fill="#00ff88" rx="1"/>
+  <!-- Candle 5 - green (uptrend) -->
+  <line x1="132" y1="35" x2="132" y2="90" stroke="#00ff88" stroke-width="2"/>
+  <rect x="126" y="40" width="12" height="25" fill="#00ff88" rx="1"/>
+  <!-- Trend line -->
+  <polyline points="52,85 72,72 92,95 112,65 132,52" fill="none" stroke="#00d4ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Dollar sign -->
+  <text x="96" y="168" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="#00d4ff">$TONKERS</text>
+</svg>
