@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 # Dashboard will be initialized with these references
 _db = None
 _trader = None
 _strategies = None
 _config = None
+_alpaca = None
 
 # Resolve static directory relative to this file's location
 _static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
@@ -23,6 +24,125 @@ app = Flask(__name__, static_folder=_static_dir, static_url_path='/static')
 def index():
     """Serve the PWA dashboard."""
     return send_from_directory(_static_dir, 'index.html')
+
+
+def _safe_float(value, default=None):
+    """Safely convert a value to float, returning default if None or invalid."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _symbol_to_pair(symbol: str) -> str:
+    """Convert Alpaca symbol format to pair format (e.g. 'ETHUSD' -> 'ETH/USD')."""
+    if '/' in symbol:
+        return symbol
+    # Handle common quote currencies
+    for suffix in ('USD', 'USDT', 'BTC', 'EUR'):
+        if symbol.endswith(suffix) and len(symbol) > len(suffix):
+            return symbol[:-len(suffix)] + '/' + suffix
+    return symbol
+
+
+def _get_positions_live():
+    """Fetch positions from Alpaca API and enrich with local DB data."""
+    positions = []
+    if not _alpaca:
+        return positions
+
+    try:
+        alpaca_positions = _alpaca.get_open_positions()
+    except Exception:
+        alpaca_positions = []
+
+    # Build lookup of local DB positions by pair for enrichment
+    db_positions_by_pair = {}
+    if _db:
+        try:
+            for pos in _db.get_open_positions():
+                db_positions_by_pair[pos.pair] = pos
+        except Exception:
+            pass
+
+    for ap in alpaca_positions:
+        # Alpaca position attributes are strings (even numeric ones)
+        # and Optional fields can be None
+        symbol = getattr(ap, 'symbol', '') or ''
+        pair = _symbol_to_pair(symbol)
+
+        qty = abs(_safe_float(getattr(ap, 'qty', None), 0))
+        # side is a PositionSide(str, Enum) - use .value for clean serialization
+        side_raw = getattr(ap, 'side', 'long')
+        side = side_raw.value if hasattr(side_raw, 'value') else str(side_raw)
+        entry_price = _safe_float(getattr(ap, 'avg_entry_price', None), 0)
+        current_price = _safe_float(getattr(ap, 'current_price', None))
+        market_value = _safe_float(getattr(ap, 'market_value', None))
+        unrealized_pl = _safe_float(getattr(ap, 'unrealized_pl', None))
+        unrealized_plpc_raw = _safe_float(getattr(ap, 'unrealized_plpc', None))
+        unrealized_plpc = round(unrealized_plpc_raw * 100, 2) if unrealized_plpc_raw is not None else None
+        cost_basis = _safe_float(getattr(ap, 'cost_basis', None), 0)
+
+        # Enrich with local DB data if available
+        db_pos = db_positions_by_pair.get(pair)
+        strategy = db_pos.strategy_name if db_pos else 'external'
+        entry_time = db_pos.entry_time.strftime('%Y-%m-%d %H:%M') if db_pos else ''
+        stop_loss = float(db_pos.stop_loss_price) if db_pos and db_pos.stop_loss_price else None
+        take_profit = float(db_pos.take_profit_price) if db_pos and db_pos.take_profit_price else None
+
+        positions.append({
+            'pair': pair,
+            'symbol': symbol,
+            'direction': side,
+            'entry_price': entry_price,
+            'current_price': current_price,
+            'quantity': qty,
+            'market_value': market_value,
+            'cost_basis': cost_basis,
+            'unrealized_pnl': unrealized_pl,
+            'unrealized_pnl_pct': unrealized_plpc,
+            'strategy': strategy,
+            'entry_time': entry_time,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'source': 'alpaca',
+        })
+
+    return positions
+
+
+def _get_positions_paper():
+    """Fetch positions from local DB (paper trading mode)."""
+    positions = []
+    if not _db:
+        return positions
+
+    try:
+        open_positions = _db.get_open_positions()
+        for pos in open_positions:
+            positions.append({
+                'pair': pos.pair,
+                'symbol': pos.pair.replace('/', ''),
+                'direction': pos.direction.value,
+                'entry_price': float(pos.entry_price),
+                'current_price': None,
+                'quantity': float(pos.quantity),
+                'market_value': None,
+                'cost_basis': float(pos.entry_price * pos.quantity),
+                'unrealized_pnl': None,
+                'unrealized_pnl_pct': None,
+                'strategy': pos.strategy_name,
+                'entry_time': pos.entry_time.strftime('%Y-%m-%d %H:%M'),
+                'stop_loss': float(pos.stop_loss_price) if pos.stop_loss_price else None,
+                'take_profit': float(pos.take_profit_price) if pos.take_profit_price else None,
+                'source': 'paper',
+            })
+    except Exception:
+        pass
+
+    return positions
 
 
 @app.route("/api/dashboard")
@@ -42,22 +162,11 @@ def api_dashboard():
     if _config:
         paper_mode = getattr(_config.paper_trading, 'enabled', True)
 
-    # Get open positions
-    positions = []
-    if _db:
-        try:
-            open_positions = _db.get_open_positions()
-            for pos in open_positions:
-                positions.append({
-                    'pair': pos.pair,
-                    'direction': pos.direction.value,
-                    'entry_price': float(pos.entry_price),
-                    'quantity': float(pos.quantity),
-                    'strategy': pos.strategy_name,
-                    'entry_time': pos.entry_time.strftime('%Y-%m-%d %H:%M'),
-                })
-        except Exception:
-            pass
+    # Get open positions from appropriate source
+    if not paper_mode and _alpaca:
+        positions = _get_positions_live()
+    else:
+        positions = _get_positions_paper()
 
     # Get recent trades
     trades = []
@@ -71,6 +180,14 @@ def api_dashboard():
                     'pnl': float(trade['pnl']),
                     'pnl_pct': float(trade['pnl_pct']),
                 })
+        except Exception:
+            pass
+
+    # Get recent signal activity
+    signals = []
+    if _db:
+        try:
+            signals = _db.get_recent_signal_logs(limit=20)
         except Exception:
             pass
 
@@ -89,9 +206,46 @@ def api_dashboard():
         'paper_mode': paper_mode,
         'positions': positions,
         'trades': trades,
+        'signals': signals,
         'strategies': strategy_list,
         'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
     })
+
+
+@app.route("/api/positions/close", methods=["POST"])
+def api_close_position():
+    """Emergency close a position via Alpaca API."""
+    if not _alpaca:
+        return jsonify({'error': 'No exchange connector available'}), 503
+
+    data = request.get_json()
+    if not data or 'symbol' not in data:
+        return jsonify({'error': 'Missing symbol parameter'}), 400
+
+    symbol = data['symbol']
+
+    try:
+        success = _alpaca.close_position(symbol)
+        if success:
+            # Also close in local DB if tracked
+            if _db:
+                try:
+                    pair = _symbol_to_pair(symbol)
+                    open_positions = _db.get_open_positions()
+                    for pos in open_positions:
+                        if pos.pair == pair:
+                            from src.engine.position_manager import PositionManager
+                            pm = PositionManager(_db)
+                            pm.close_position(pair, pos.entry_price, 'manual_emergency_close')
+                            break
+                except Exception:
+                    pass  # DB cleanup is best-effort
+
+            return jsonify({'success': True, 'message': f'Position {symbol} closed'})
+        else:
+            return jsonify({'error': f'Failed to close position {symbol}'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route("/health")
@@ -135,13 +289,14 @@ def api_status():
     }
 
 
-def init_dashboard(db, trader, strategies, config):
+def init_dashboard(db, trader, strategies, config, alpaca=None):
     """Initialize dashboard with references to bot components."""
-    global _db, _trader, _strategies, _config
+    global _db, _trader, _strategies, _config, _alpaca
     _db = db
     _trader = trader
     _strategies = strategies
     _config = config
+    _alpaca = alpaca
 
 
 def start_dashboard(port: int = 3004):
