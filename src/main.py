@@ -117,7 +117,7 @@ def main():
 
     # Start web dashboard
     DASHBOARD_PORT = 3004
-    init_dashboard(db, trader, strategies, config)
+    init_dashboard(db, trader, strategies, config, alpaca=alpaca)
     start_dashboard(port=DASHBOARD_PORT)
     console.print(f"[bold green]✓ Dashboard started on port {DASHBOARD_PORT}[/bold green]")
 
