@@ -26,6 +26,27 @@ def index():
     return send_from_directory(_static_dir, 'index.html')
 
 
+def _safe_float(value, default=None):
+    """Safely convert a value to float, returning default if None or invalid."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _symbol_to_pair(symbol: str) -> str:
+    """Convert Alpaca symbol format to pair format (e.g. 'ETHUSD' -> 'ETH/USD')."""
+    if '/' in symbol:
+        return symbol
+    # Handle common quote currencies
+    for suffix in ('USD', 'USDT', 'BTC', 'EUR'):
+        if symbol.endswith(suffix) and len(symbol) > len(suffix):
+            return symbol[:-len(suffix)] + '/' + suffix
+    return symbol
+
+
 def _get_positions_live():
     """Fetch positions from Alpaca API and enrich with local DB data."""
     positions = []
@@ -47,21 +68,22 @@ def _get_positions_live():
             pass
 
     for ap in alpaca_positions:
-        # Alpaca position object attributes
-        symbol = getattr(ap, 'symbol', '')
-        # Convert "ETHUSD" back to "ETH/USD" format for display
-        pair = symbol
-        if '/' not in pair and len(pair) > 3 and pair.endswith('USD'):
-            pair = pair[:-3] + '/USD'
+        # Alpaca position attributes are strings (even numeric ones)
+        # and Optional fields can be None
+        symbol = getattr(ap, 'symbol', '') or ''
+        pair = _symbol_to_pair(symbol)
 
-        qty = abs(float(getattr(ap, 'qty', 0)))
-        side = getattr(ap, 'side', 'long')
-        entry_price = float(getattr(ap, 'avg_entry_price', 0))
-        current_price = float(getattr(ap, 'current_price', 0))
-        market_value = float(getattr(ap, 'market_value', 0))
-        unrealized_pl = float(getattr(ap, 'unrealized_pl', 0))
-        unrealized_plpc = float(getattr(ap, 'unrealized_plpc', 0)) * 100  # to pct
-        cost_basis = float(getattr(ap, 'cost_basis', 0))
+        qty = abs(_safe_float(getattr(ap, 'qty', None), 0))
+        # side is a PositionSide(str, Enum) - use .value for clean serialization
+        side_raw = getattr(ap, 'side', 'long')
+        side = side_raw.value if hasattr(side_raw, 'value') else str(side_raw)
+        entry_price = _safe_float(getattr(ap, 'avg_entry_price', None), 0)
+        current_price = _safe_float(getattr(ap, 'current_price', None))
+        market_value = _safe_float(getattr(ap, 'market_value', None))
+        unrealized_pl = _safe_float(getattr(ap, 'unrealized_pl', None))
+        unrealized_plpc_raw = _safe_float(getattr(ap, 'unrealized_plpc', None))
+        unrealized_plpc = round(unrealized_plpc_raw * 100, 2) if unrealized_plpc_raw is not None else None
+        cost_basis = _safe_float(getattr(ap, 'cost_basis', None), 0)
 
         # Enrich with local DB data if available
         db_pos = db_positions_by_pair.get(pair)
@@ -80,7 +102,7 @@ def _get_positions_live():
             'market_value': market_value,
             'cost_basis': cost_basis,
             'unrealized_pnl': unrealized_pl,
-            'unrealized_pnl_pct': round(unrealized_plpc, 2),
+            'unrealized_pnl_pct': unrealized_plpc,
             'strategy': strategy,
             'entry_time': entry_time,
             'stop_loss': stop_loss,
@@ -208,9 +230,7 @@ def api_close_position():
             # Also close in local DB if tracked
             if _db:
                 try:
-                    pair = symbol
-                    if '/' not in pair and len(pair) > 3 and pair.endswith('USD'):
-                        pair = pair[:-3] + '/USD'
+                    pair = _symbol_to_pair(symbol)
                     open_positions = _db.get_open_positions()
                     for pos in open_positions:
                         if pos.pair == pair:
