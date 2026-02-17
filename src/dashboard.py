@@ -1,6 +1,6 @@
 """Simple web dashboard for Stonkers trading bot."""
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -88,6 +88,28 @@ DASHBOARD_HTML = """
             <span class="stat-value {{ 'neutral' if paper_mode else 'negative' }}">
                 {{ 'Paper Trading' if paper_mode else 'LIVE TRADING' }}
             </span>
+        </div>
+    </div>
+
+    <h2>P&amp;L (7 days)</h2>
+    <div class="card">
+        <div class="stat">
+            <span class="stat-label">Total P&amp;L</span>
+            <span class="stat-value {{ 'positive' if pnl_total >= 0 else 'negative' }}">
+                ${{ "%.2f"|format(pnl_total) }}
+            </span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Win Rate</span>
+            <span class="stat-value">{{ "%.1f"|format(pnl_win_rate) }}%</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Total Trades</span>
+            <span class="stat-value">{{ pnl_trade_count }}</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Profit Factor</span>
+            <span class="stat-value">{{ "%.2f"|format(pnl_profit_factor) }}</span>
         </div>
     </div>
 
@@ -219,6 +241,27 @@ def dashboard():
                 'enabled': True,
             })
 
+    # Compute P&L metrics (last 7 days)
+    pnl_total = 0.0
+    pnl_win_rate = 0.0
+    pnl_trade_count = 0
+    pnl_profit_factor = 0.0
+    if _db:
+        try:
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            pnl_trades = _db.get_trades_by_strategy(since=since)
+            if pnl_trades:
+                pnl_trade_count = len(pnl_trades)
+                pnl_total = float(sum(t["pnl"] for t in pnl_trades))
+                winners = [t for t in pnl_trades if t["pnl"] > 0]
+                losers = [t for t in pnl_trades if t["pnl"] <= 0]
+                pnl_win_rate = (len(winners) / pnl_trade_count) * 100
+                gross_profit = float(sum(t["pnl"] for t in winners))
+                gross_loss = abs(float(sum(t["pnl"] for t in losers)))
+                pnl_profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0.0
+        except Exception:
+            pass
+
     return render_template_string(
         DASHBOARD_HTML,
         cash=float(cash),
@@ -227,6 +270,10 @@ def dashboard():
         positions=positions,
         trades=trades,
         strategies=strategy_list,
+        pnl_total=pnl_total,
+        pnl_win_rate=pnl_win_rate,
+        pnl_trade_count=pnl_trade_count,
+        pnl_profit_factor=pnl_profit_factor,
         timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
     )
 

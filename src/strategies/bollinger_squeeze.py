@@ -13,7 +13,8 @@ from typing import List, Optional
 import pandas as pd
 
 from src.models.candle import Candle
-from src.models.signal import Signal, SignalType
+from src.models.position import Direction
+from src.models.signal import ExitSignal, Signal, SignalType
 from src.strategies.base import Strategy
 
 
@@ -238,6 +239,40 @@ class BollingerSqueezeStrategy(Strategy):
                             'avg_volume': float(curr['avg_volume']) if not pd.isna(curr['avg_volume']) else 0.0,
                         }
                     )
+
+        return None
+
+    def should_exit(self, position, candles: List[Candle], current_price) -> Optional[ExitSignal]:
+        """Exit if price returns inside Bollinger Bands after breakout entry."""
+        min_required = self.bb_period + 2
+        if len(candles) < min_required:
+            return None
+
+        df = self._candles_to_df(candles)
+        df['sma'] = df['close'].rolling(window=self.bb_period).mean()
+        df['std'] = df['close'].rolling(window=self.bb_period).std()
+        df['upper_band'] = df['sma'] + (df['std'] * self.bb_std)
+        df['lower_band'] = df['sma'] - (df['std'] * self.bb_std)
+
+        current = df.iloc[-1]
+        price = float(current_price)
+
+        if pd.isna(current['upper_band']):
+            return None
+
+        # Long: exit if price drops back below upper band
+        if position.direction == Direction.LONG and price < float(current['upper_band']):
+            return ExitSignal(
+                should_exit=True,
+                reason="Price returned inside BB upper band",
+            )
+
+        # Short: exit if price rises back above lower band
+        if position.direction == Direction.SHORT and price > float(current['lower_band']):
+            return ExitSignal(
+                should_exit=True,
+                reason="Price returned inside BB lower band",
+            )
 
         return None
 

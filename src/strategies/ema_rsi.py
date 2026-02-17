@@ -13,7 +13,8 @@ from typing import List, Optional
 import pandas as pd
 
 from src.models.candle import Candle
-from src.models.signal import Signal, SignalType
+from src.models.position import Direction
+from src.models.signal import ExitSignal, Signal, SignalType
 from src.strategies.base import Strategy
 
 
@@ -168,6 +169,25 @@ class EmaRsiStrategy(Strategy):
                 take_profit_price=take_profit,
             )
 
+        return None
+
+    def should_exit(self, position, candles: List[Candle], current_price) -> Optional[ExitSignal]:
+        """Exit when RSI returns to neutral zone (45-55)."""
+        if len(candles) < self.rsi_period + 1:
+            return None
+
+        df = self._candles_to_df(candles)
+        df['rsi'] = self._calculate_rsi(df['close'], self.rsi_period)
+        current_rsi = df['rsi'].iloc[-1]
+
+        if pd.isna(current_rsi):
+            return None
+
+        if 45 <= current_rsi <= 55:
+            return ExitSignal(
+                should_exit=True,
+                reason=f"RSI neutral zone exit (RSI: {current_rsi:.1f})",
+            )
         return None
 
     def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
