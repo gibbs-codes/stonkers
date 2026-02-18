@@ -190,6 +190,39 @@ class EmaRsiStrategy(Strategy):
             )
         return None
 
+    def diagnostics(self, candles: List[Candle]) -> dict:
+        """Return current indicator values and condition statuses for debugging."""
+        min_required = max(self.ema_period, self.rsi_period) + 2
+        if not candles or len(candles) < min_required:
+            return {"status": f"need {min_required} candles, have {len(candles) if candles else 0}"}
+
+        df = self._candles_to_df(candles)
+        df['ema'] = df['close'].ewm(span=self.ema_period, adjust=False).mean()
+        df['rsi'] = self._calculate_rsi(df['close'], self.rsi_period)
+
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        price = current['close']
+        ema = current['ema']
+        rsi = current['rsi']
+        prev_rsi = previous['rsi']
+        distance_pct = abs((price - ema) / ema)
+
+        side = "below" if price < ema else "above"
+        rsi_cross_up = prev_rsi <= self.rsi_oversold < rsi
+        rsi_cross_down = prev_rsi >= self.rsi_overbought > rsi
+
+        return {
+            "price": f"${price:.2f}",
+            "ema": f"${ema:.2f} (price {side})",
+            "distance": f"{distance_pct:.2%} (need <={self.proximity_pct:.0%})",
+            "distance_filter": "PASS" if self.min_distance_from_ema_pct <= distance_pct <= self.max_distance_from_ema_pct else f"FAIL (need {self.min_distance_from_ema_pct:.1%}-{self.max_distance_from_ema_pct:.1%})",
+            "proximity": "PASS" if distance_pct <= self.proximity_pct else "FAIL",
+            "rsi": f"{rsi:.1f} (prev {prev_rsi:.1f})",
+            "rsi_long": f"{'PASS' if rsi_cross_up else 'FAIL'} (need prev<={self.rsi_oversold}, curr>{self.rsi_oversold})",
+            "rsi_short": f"{'PASS' if rsi_cross_down else 'FAIL'} (need prev>={self.rsi_overbought}, curr<{self.rsi_overbought})",
+        }
+
     def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
         """Convert candles to pandas DataFrame.
 

@@ -479,6 +479,41 @@ class Database:
         )
         self.conn.commit()
 
+    def get_recent_signal_logs(self, limit: int = 20) -> list:
+        """Get recent signal logs for activity feed.
+
+        Args:
+            limit: Maximum number of logs to return
+
+        Returns:
+            List of signal log dicts
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT timestamp, pair, strategy_name, signal_type, strength,
+                   status, rejection_reason, actual_entry_price, actual_exit_price,
+                   pnl_actual, position_id
+            FROM signal_logs
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+
+        logs = []
+        for row in cursor.fetchall():
+            logs.append({
+                'timestamp': row['timestamp'],
+                'pair': row['pair'],
+                'strategy': row['strategy_name'],
+                'signal_type': row['signal_type'],
+                'strength': row['strength'],
+                'status': row['status'],
+                'rejection_reason': row['rejection_reason'],
+                'entry_price': row['actual_entry_price'],
+                'exit_price': row['actual_exit_price'],
+                'pnl': row['pnl_actual'],
+            })
+        return logs
+
     def get_recent_trades(self, limit: int = 10) -> list:
         """Get recent closed trades.
 

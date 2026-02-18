@@ -166,6 +166,12 @@ class TradingEngine:
             if self.position_manager.has_position(pair):
                 continue
 
+            if not candles:
+                console.print(f"[red]{pair}: No candles received[/red]")
+                continue
+
+            # Run all strategies on this pair
+            signal_found = False
             for strategy in self.strategies:
                 # Set current regime context on strategy
                 strategy.regime = self._regime_cache.get(pair)
@@ -175,6 +181,9 @@ class TradingEngine:
                 if not signal:
                     continue
 
+                signal_found = True
+
+                # Check if signal passes risk rules
                 can_open, reason = self.risk_manager.can_open_position(
                     signal=signal,
                     open_positions_count=len(self.position_manager.get_all_open()),
@@ -209,6 +218,17 @@ class TradingEngine:
                 console.print(f"  Reasoning: {signal.reasoning}")
 
                 break
+
+            # If no strategy generated a signal, print diagnostics
+            if not signal_found:
+                console.print(f"\n[dim][{pair}] No signals — {len(candles)} candles available[/dim]")
+                for strategy in self.strategies:
+                    try:
+                        diag = strategy.diagnostics(candles)
+                        parts = [f"{k}={v}" for k, v in diag.items()]
+                        console.print(f"[dim]  {strategy.name}: {', '.join(parts)}[/dim]")
+                    except Exception as e:
+                        console.print(f"[dim]  {strategy.name}: diagnostics error: {e}[/dim]")
 
     def _update_equity(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Update account equity with unrealized P&L from open positions."""

@@ -1,7 +1,7 @@
 """Base strategy class that all strategies inherit from."""
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.models.candle import Candle
 from src.models.signal import Signal, ExitSignal
@@ -68,6 +68,20 @@ class Strategy(ABC):
             ExitSignal if position should close, None otherwise
         """
         return None
+
+    def diagnostics(self, candles: List[Candle]) -> Dict[str, str]:
+        """Return a dict of current indicator values and condition statuses.
+
+        Used for debugging why a strategy is not generating signals.
+        Override in subclasses with strategy-specific diagnostics.
+
+        Args:
+            candles: List of recent candles
+
+        Returns:
+            Dict with human-readable key-value diagnostic info
+        """
+        return {"status": "no diagnostics implemented"}
 
     def _validate_candles(self, candles: List[Candle], min_required: int) -> bool:
         """Validate candles list has enough data.

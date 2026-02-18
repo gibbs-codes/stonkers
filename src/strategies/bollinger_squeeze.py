@@ -276,6 +276,41 @@ class BollingerSqueezeStrategy(Strategy):
 
         return None
 
+    def diagnostics(self, candles: List[Candle]) -> dict:
+        """Return current indicator values and condition statuses for debugging."""
+        min_required = self.bb_period + 10
+        if not candles or len(candles) < min_required:
+            return {"status": f"need {min_required} candles, have {len(candles) if candles else 0}"}
+
+        df = self._candles_to_df(candles)
+        df['sma'] = df['close'].rolling(window=self.bb_period).mean()
+        df['std'] = df['close'].rolling(window=self.bb_period).std()
+        df['upper_band'] = df['sma'] + (df['std'] * self.bb_std)
+        df['lower_band'] = df['sma'] - (df['std'] * self.bb_std)
+        df['bandwidth'] = (df['upper_band'] - df['lower_band']) / df['sma']
+        df['is_squeeze'] = df['bandwidth'] < self.squeeze_threshold
+
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        price = current['close']
+        upper = current['upper_band']
+        lower = current['lower_band']
+        bw = current['bandwidth']
+        recent_squeeze = df['is_squeeze'].iloc[-10:].any()
+
+        broke_upper = price > upper and previous['close'] <= previous['upper_band']
+        broke_lower = price < lower and previous['close'] >= previous['lower_band']
+
+        return {
+            "price": f"${price:.2f}",
+            "upper_band": f"${upper:.2f}",
+            "lower_band": f"${lower:.2f}",
+            "bandwidth": f"{bw:.3f} (squeeze <{self.squeeze_threshold})",
+            "recent_squeeze": f"{'YES' if recent_squeeze else 'NO'} (last 10 candles)",
+            "broke_upper": f"{'PASS' if broke_upper else 'FAIL'}",
+            "broke_lower": f"{'PASS' if broke_lower else 'FAIL'}",
+        }
+
     def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
         """Convert candles to pandas DataFrame.
 
