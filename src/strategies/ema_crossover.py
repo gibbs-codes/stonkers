@@ -56,6 +56,10 @@ class EmaCrossoverStrategy(Strategy):
         Returns:
             Signal if crossover detected, None otherwise
         """
+        # Skip if market is ranging (trend following underperforms)
+        if self.regime and self.regime.status == "ranging":
+            return None
+
         # Need enough candles for slow EMA + 2 periods for crossover detection
         min_required = max(self.slow_period, self.trend_filter_period) + 2
         if not self._validate_candles(candles, min_required):

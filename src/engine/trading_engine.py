@@ -1,11 +1,12 @@
 """Main trading engine - orchestrates the trading loop."""
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from rich.console import Console
 from rich.table import Table
 
+from src.analysis.range_detector import RangeDetector
 from src.data.database import Database
 from src.engine.paper_trader import PaperTrader
 from src.engine.position_manager import PositionManager
@@ -39,6 +40,8 @@ class TradingEngine:
         self.risk_manager = risk_manager
         self.trader = trader
         self.position_manager = PositionManager(db)
+        self.range_detector = RangeDetector()
+        self._regime_cache: Dict[str, object] = {}
 
         # Keep backwards compatibility
         self.paper_trader = trader
@@ -52,6 +55,7 @@ class TradingEngine:
         """Process new candles for all pairs.
 
         This is the main loop that:
+        0. Updates market regime for each pair
         1. Checks if existing positions should close
         2. Runs strategies to find new entry signals
         3. Opens new positions if signals pass risk checks
@@ -59,6 +63,9 @@ class TradingEngine:
         Args:
             candles_by_pair: Dict mapping pair -> list of recent candles
         """
+        # Step 0: Update market regimes
+        self._update_regimes(candles_by_pair)
+
         # Step 1: Check existing positions for exits
         self._check_position_exits(candles_by_pair)
 
@@ -71,8 +78,34 @@ class TradingEngine:
         # Step 4: Display status
         self._display_status()
 
+    def _update_regimes(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
+        """Compute market regime for each pair."""
+        for pair, candles in candles_by_pair.items():
+            if candles and len(candles) >= 20:
+                regime = self.range_detector.detect(candles)
+                self._regime_cache[pair] = regime
+                console.print(
+                    f"[dim]{pair} regime: {regime.status} "
+                    f"(bandwidth: {regime.bandwidth_pct:.2%})[/dim]"
+                )
+                try:
+                    self.db.insert_regime_log(
+                        datetime.now(timezone.utc), pair, regime
+                    )
+                except Exception:
+                    pass
+
+    def _find_strategy(self, strategy_name: str) -> Optional[Strategy]:
+        """Find a strategy by name."""
+        for s in self.strategies:
+            if s.name == strategy_name:
+                return s
+        return None
+
     def _check_position_exits(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Check if any open positions should be closed.
+
+        Uses strategy-specific exits first, then risk manager rules.
 
         Args:
             candles_by_pair: Dict mapping pair -> candles
@@ -85,45 +118,37 @@ class TradingEngine:
             if not candles:
                 continue
 
-            # Get current price from latest candle
             current_price = candles[-1].close
 
-            # Check RSI-based exit for EMA_RSI strategy positions
+            # Update trailing stop high-water mark
+            self.risk_manager.update_high_water_mark(position, current_price)
+
             should_close = False
             reason = ""
 
-            if position.strategy_name == "EMA_RSI" and len(candles) >= 14:
-                # Calculate current RSI
-                import pandas as pd
-                df = pd.DataFrame([{'close': float(c.close)} for c in candles])
-                delta = df['close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs))
-                current_rsi = rsi.iloc[-1]
-
-                # Exit if RSI in neutral zone (45-55)
-                if 45 <= current_rsi <= 55:
+            # 1. Check strategy-specific exit
+            strategy = self._find_strategy(position.strategy_name)
+            if strategy:
+                exit_signal = strategy.should_exit(position, candles, current_price)
+                if exit_signal and exit_signal.should_exit:
                     should_close = True
-                    reason = f"RSI neutral zone exit (RSI: {current_rsi:.1f})"
+                    reason = exit_signal.reason
 
-            # If not RSI exit, check risk manager rules (stop loss / take profit)
+            # 2. If no strategy exit, check risk manager (SL/TP/trailing)
             if not should_close:
                 should_close, reason = self.risk_manager.should_close_position(
                     position, current_price
                 )
 
             if should_close:
-                # Execute exit
                 self.paper_trader.execute_exit(position, current_price)
 
-                # Close position in manager
                 closed = self.position_manager.close_position(
                     pair, current_price, reason
                 )
 
-                # Log the close
+                self.risk_manager.clear_position_state(position.id)
+
                 pnl = closed.realized_pnl()
                 console.print(
                     f"[yellow]CLOSED {pair} {position.direction.value}:[/yellow] "
@@ -138,7 +163,6 @@ class TradingEngine:
             candles_by_pair: Dict mapping pair -> candles
         """
         for pair, candles in candles_by_pair.items():
-            # Skip if we already have a position for this pair
             if self.position_manager.has_position(pair):
                 continue
 
@@ -149,6 +173,9 @@ class TradingEngine:
             # Run all strategies on this pair
             signal_found = False
             for strategy in self.strategies:
+                # Set current regime context on strategy
+                strategy.regime = self._regime_cache.get(pair)
+
                 signal = strategy.analyze(candles)
 
                 if not signal:
@@ -167,27 +194,22 @@ class TradingEngine:
                     console.print(f"[dim]Signal blocked: {reason}[/dim]")
                     continue
 
-                # Calculate position size
                 account_value = self.paper_trader.get_account_value()
                 entry_price = candles[-1].close
                 quantity = self.risk_manager.calculate_position_size(
                     account_value, entry_price
                 )
 
-                # Execute entry
                 position = self.paper_trader.execute_entry(
                     signal, entry_price, quantity
                 )
 
-                # Check if entry succeeded
                 if position is None:
                     console.print(f"[red]Entry execution failed for {pair}[/red]")
                     continue
 
-                # Open position in manager
                 self.position_manager.open_position(position)
 
-                # Log the entry
                 console.print(
                     f"[bold green]OPENED {pair} {position.direction.value}:[/bold green] "
                     f"Price ${entry_price}, Qty {quantity:.4f}, "
@@ -195,7 +217,6 @@ class TradingEngine:
                 )
                 console.print(f"  Reasoning: {signal.reasoning}")
 
-                # Only take first signal per pair per iteration
                 break
 
             # If no strategy generated a signal, print diagnostics
@@ -210,11 +231,7 @@ class TradingEngine:
                         console.print(f"[dim]  {strategy.name}: diagnostics error: {e}[/dim]")
 
     def _update_equity(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
-        """Update account equity with unrealized P&L from open positions.
-
-        Args:
-            candles_by_pair: Dict mapping pair -> candles
-        """
+        """Update account equity with unrealized P&L from open positions."""
         total_unrealized = Decimal("0")
 
         for pair, position in self.position_manager.get_all_open().items():
@@ -229,13 +246,11 @@ class TradingEngine:
 
     def _display_status(self) -> None:
         """Display current trading status."""
-        # Account summary
         cash = self.paper_trader.get_cash_balance()
         equity = self.paper_trader.get_account_value()
 
         console.print(f"\n[bold]Account:[/bold] Cash ${cash:.2f} | Equity ${equity:.2f}")
 
-        # Open positions
         open_positions = self.position_manager.get_all_open()
         if open_positions:
             table = Table(title="Open Positions")

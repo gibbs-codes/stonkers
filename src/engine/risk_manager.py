@@ -1,4 +1,4 @@
-"""Risk manager - pure functions for risk checks."""
+"""Risk manager - risk checks and trailing stop tracking."""
 from decimal import Decimal
 from typing import Dict, Optional
 
@@ -7,11 +7,7 @@ from src.models.signal import Signal
 
 
 class RiskManager:
-    """Manages risk rules and position sizing.
-
-    Pure functions - no state, no side effects.
-    All decisions based on inputs only.
-    """
+    """Manages risk rules, position sizing, and trailing stops."""
 
     def __init__(
         self,
@@ -19,6 +15,7 @@ class RiskManager:
         max_position_size_pct: Decimal = Decimal("0.2"),  # 20% per position
         stop_loss_pct: Decimal = Decimal("0.02"),  # 2% stop loss
         take_profit_pct: Decimal = Decimal("0.05"),  # 5% take profit
+        trailing_stop_pct: Optional[Decimal] = None,  # e.g., 0.015 = 1.5%
     ):
         """Initialize risk manager.
 
@@ -27,11 +24,15 @@ class RiskManager:
             max_position_size_pct: Max % of portfolio per position (0.0 to 1.0)
             stop_loss_pct: Stop loss percentage (0.0 to 1.0)
             take_profit_pct: Take profit percentage (0.0 to 1.0)
+            trailing_stop_pct: Trailing stop percentage (None to disable)
         """
         self.max_positions = max_positions
         self.max_position_size_pct = max_position_size_pct
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.trailing_stop_pct = trailing_stop_pct
+        # High-water marks for trailing stops (position_id -> best price)
+        self._high_water_marks: Dict[str, Decimal] = {}
 
     def can_open_position(
         self,
@@ -85,6 +86,42 @@ class RiskManager:
 
         return quantity
 
+    def update_high_water_mark(self, position: Position, current_price: Decimal) -> None:
+        """Update the high-water mark for trailing stop calculation."""
+        pos_id = position.id
+        if position.direction == Direction.LONG:
+            if pos_id not in self._high_water_marks or current_price > self._high_water_marks[pos_id]:
+                self._high_water_marks[pos_id] = current_price
+        else:  # SHORT — track lowest price
+            if pos_id not in self._high_water_marks or current_price < self._high_water_marks[pos_id]:
+                self._high_water_marks[pos_id] = current_price
+
+    def check_trailing_stop(self, position: Position, current_price: Decimal) -> tuple[bool, str]:
+        """Check if trailing stop is hit."""
+        if not self.trailing_stop_pct:
+            return False, ""
+
+        pos_id = position.id
+        if pos_id not in self._high_water_marks:
+            return False, ""
+
+        hwm = self._high_water_marks[pos_id]
+
+        if position.direction == Direction.LONG:
+            trail_price = hwm * (Decimal("1") - self.trailing_stop_pct)
+            if current_price <= trail_price:
+                return True, f"Trailing stop hit (HWM: ${hwm:.2f}, trail: ${trail_price:.2f})"
+        else:  # SHORT
+            trail_price = hwm * (Decimal("1") + self.trailing_stop_pct)
+            if current_price >= trail_price:
+                return True, f"Trailing stop hit (HWM: ${hwm:.2f}, trail: ${trail_price:.2f})"
+
+        return False, ""
+
+    def clear_position_state(self, position_id: str) -> None:
+        """Clean up tracking state when a position is closed."""
+        self._high_water_marks.pop(position_id, None)
+
     def should_close_position(
         self,
         position: Position,
@@ -111,6 +148,11 @@ class RiskManager:
                 return True, f"Per-signal take profit hit ({current_price} >= {position.take_profit_price})"
             if position.direction == Direction.SHORT and current_price <= position.take_profit_price:
                 return True, f"Per-signal take profit hit ({current_price} <= {position.take_profit_price})"
+
+        # Trailing stop check
+        trailing_hit, trailing_reason = self.check_trailing_stop(position, current_price)
+        if trailing_hit:
+            return True, trailing_reason
 
         # Calculate P&L percentage
         pnl = position.unrealized_pnl(current_price)

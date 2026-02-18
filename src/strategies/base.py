@@ -1,16 +1,17 @@
 """Base strategy class that all strategies inherit from."""
 from abc import ABC, abstractmethod
+from decimal import Decimal
 from typing import Dict, List, Optional
 
 from src.models.candle import Candle
-from src.models.signal import Signal
+from src.models.signal import Signal, ExitSignal
 
 
 class Strategy(ABC):
     """Base class for all trading strategies.
 
-    Strategies analyze candles and generate ENTRY signals only.
-    Exit logic is handled by the engine via risk rules.
+    Strategies analyze candles and generate ENTRY signals.
+    Strategies may also provide custom exit logic via should_exit().
     """
 
     def __init__(self, name: str):
@@ -23,6 +24,17 @@ class Strategy(ABC):
         # Optional multi-timeframe filter flags; assigned post-init from config
         self.use_mtf_filter = False
         self.mtf_timeframe = "4h"
+        # Market regime context, set by engine before analyze()
+        self._current_regime = None
+
+    @property
+    def regime(self):
+        """Current market regime (RangeAnalysis), set by the engine."""
+        return self._current_regime
+
+    @regime.setter
+    def regime(self, value):
+        self._current_regime = value
 
     @abstractmethod
     def analyze(self, candles: List[Candle]) -> Optional[Signal]:
@@ -40,6 +52,22 @@ class Strategy(ABC):
             - Candles list should have enough history for indicator calculations
         """
         pass
+
+    def should_exit(self, position, candles: List[Candle], current_price: Decimal) -> Optional[ExitSignal]:
+        """Check if position should be closed based on strategy-specific logic.
+
+        Override in strategies that have custom exit logic.
+        Default returns None (no strategy-level exit).
+
+        Args:
+            position: The open Position to evaluate
+            candles: Recent candles for the position's pair
+            current_price: Current market price
+
+        Returns:
+            ExitSignal if position should close, None otherwise
+        """
+        return None
 
     def diagnostics(self, candles: List[Candle]) -> Dict[str, str]:
         """Return a dict of current indicator values and condition statuses.

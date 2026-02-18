@@ -1,7 +1,7 @@
 """Web dashboard for Stonkers trading bot (PWA-enabled)."""
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -145,6 +145,37 @@ def _get_positions_paper():
     return positions
 
 
+def _compute_pnl_metrics():
+    """Compute P&L metrics for the last 7 days."""
+    pnl_total = 0.0
+    pnl_win_rate = 0.0
+    pnl_trade_count = 0
+    pnl_profit_factor = 0.0
+
+    if _db:
+        try:
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            pnl_trades = _db.get_trades_by_strategy(since=since)
+            if pnl_trades:
+                pnl_trade_count = len(pnl_trades)
+                pnl_total = float(sum(t["pnl"] for t in pnl_trades))
+                winners = [t for t in pnl_trades if t["pnl"] > 0]
+                losers = [t for t in pnl_trades if t["pnl"] <= 0]
+                pnl_win_rate = (len(winners) / pnl_trade_count) * 100
+                gross_profit = float(sum(t["pnl"] for t in winners))
+                gross_loss = abs(float(sum(t["pnl"] for t in losers)))
+                pnl_profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0.0
+        except Exception:
+            pass
+
+    return {
+        'total': pnl_total,
+        'win_rate': pnl_win_rate,
+        'trade_count': pnl_trade_count,
+        'profit_factor': pnl_profit_factor,
+    }
+
+
 @app.route("/api/dashboard")
 def api_dashboard():
     """JSON API endpoint for dashboard data (used by the PWA frontend)."""
@@ -200,6 +231,9 @@ def api_dashboard():
                 'enabled': True,
             })
 
+    # Compute P&L metrics (last 7 days)
+    pnl_metrics = _compute_pnl_metrics()
+
     return jsonify({
         'cash': float(cash),
         'equity': float(equity),
@@ -208,6 +242,7 @@ def api_dashboard():
         'trades': trades,
         'signals': signals,
         'strategies': strategy_list,
+        'pnl': pnl_metrics,
         'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
     })
 

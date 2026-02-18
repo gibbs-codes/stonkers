@@ -14,7 +14,8 @@ from typing import List, Optional
 import pandas as pd
 
 from src.models.candle import Candle
-from src.models.signal import Signal, SignalType
+from src.models.position import Direction
+from src.models.signal import ExitSignal, Signal, SignalType
 from src.strategies.base import Strategy
 
 
@@ -53,6 +54,10 @@ class VwapMeanReversionStrategy(Strategy):
         Returns:
             Signal if mean reversion setup detected with volume confirmation, None otherwise
         """
+        # Skip if market is trending (mean reversion underperforms)
+        if self.regime and self.regime.status == "trending":
+            return None
+
         # Need vwap_period + 20 for volume average + buffer
         min_required = self.vwap_period + 20
         if not self._validate_candles(candles, min_required):
@@ -172,6 +177,38 @@ class VwapMeanReversionStrategy(Strategy):
                 },
                 stop_loss_price=Decimal(str(current_price + (current_std * 0.5))),
                 take_profit_price=Decimal(str(current_vwap)),
+            )
+
+        return None
+
+    def should_exit(self, position, candles: List[Candle], current_price) -> Optional[ExitSignal]:
+        """Exit when price returns to VWAP (mean reversion target hit)."""
+        min_required = self.vwap_period + 20
+        if len(candles) < min_required:
+            return None
+
+        df = self._candles_to_df(candles)
+        df['vwap'] = self._calculate_vwap(df)
+        current_vwap = df['vwap'].iloc[-1]
+
+        if pd.isna(current_vwap):
+            return None
+
+        price = float(current_price)
+        vwap = float(current_vwap)
+
+        # Long: exit if price reaches or crosses above VWAP
+        if position.direction == Direction.LONG and price >= vwap:
+            return ExitSignal(
+                should_exit=True,
+                reason=f"Price returned to VWAP ({price:.2f} >= {vwap:.2f})",
+            )
+
+        # Short: exit if price reaches or crosses below VWAP
+        if position.direction == Direction.SHORT and price <= vwap:
+            return ExitSignal(
+                should_exit=True,
+                reason=f"Price returned to VWAP ({price:.2f} <= {vwap:.2f})",
             )
 
         return None

@@ -1,9 +1,10 @@
 """Database layer for persistent storage."""
+import json
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.models.position import Position, PositionStatus, Direction
 
@@ -24,6 +25,8 @@ class Database:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row  # Access columns by name
+        # Enable WAL mode for better concurrent read/write (dashboard thread)
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
 
     def _create_tables(self):
@@ -133,6 +136,95 @@ class Database:
                 close TEXT NOT NULL,
                 volume TEXT NOT NULL,
                 PRIMARY KEY (pair, timestamp)
+            )
+        """)
+
+        # Equity snapshots (time-series for P&L tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS equity_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                cash TEXT NOT NULL,
+                equity TEXT NOT NULL,
+                unrealized_pnl TEXT NOT NULL,
+                num_positions INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_equity_snapshots_ts
+            ON equity_snapshots(timestamp)
+        """)
+
+        # Backtest runs (persist backtest results for comparison)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_runs (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                strategies TEXT NOT NULL,
+                pairs TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                initial_balance TEXT NOT NULL,
+                final_equity TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                params_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Backtest trades (per-run trade records)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES backtest_runs(id),
+                pair TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_time TEXT NOT NULL,
+                exit_time TEXT NOT NULL,
+                entry_price TEXT NOT NULL,
+                exit_price TEXT NOT NULL,
+                quantity TEXT NOT NULL,
+                pnl TEXT NOT NULL,
+                fees TEXT,
+                reason TEXT
+            )
+        """)
+
+        # Backtest equity curve (per-run equity snapshots)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_equity_curve (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES backtest_runs(id),
+                timestamp TEXT NOT NULL,
+                equity TEXT NOT NULL
+            )
+        """)
+
+        # Regime logs (market regime tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS regime_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                pair TEXT NOT NULL,
+                status TEXT NOT NULL,
+                support TEXT,
+                resistance TEXT,
+                bandwidth_pct TEXT,
+                touches INTEGER
+            )
+        """)
+
+        # Reconciliation logs
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS reconciliation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                action TEXT NOT NULL,
+                pair TEXT NOT NULL,
+                details TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
 
@@ -449,6 +541,207 @@ class Database:
                 'exit_time': row['exit_time'],
             })
         return trades
+
+    # --- Equity snapshots ---
+    def insert_equity_snapshot(
+        self,
+        timestamp: datetime,
+        cash: Decimal,
+        equity: Decimal,
+        unrealized_pnl: Decimal,
+        num_positions: int,
+    ) -> None:
+        """Record an equity snapshot for P&L tracking."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO equity_snapshots (timestamp, cash, equity, unrealized_pnl, num_positions)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            timestamp.isoformat(),
+            str(cash),
+            str(equity),
+            str(unrealized_pnl),
+            num_positions,
+        ))
+        self.conn.commit()
+
+    def get_equity_snapshots(self, since: Optional[datetime] = None, limit: int = 1000) -> list:
+        """Get equity snapshots for reporting."""
+        cursor = self.conn.cursor()
+        if since:
+            cursor.execute("""
+                SELECT timestamp, cash, equity, unrealized_pnl, num_positions
+                FROM equity_snapshots
+                WHERE timestamp >= ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+            """, (since.isoformat(), limit))
+        else:
+            cursor.execute("""
+                SELECT timestamp, cash, equity, unrealized_pnl, num_positions
+                FROM equity_snapshots
+                ORDER BY timestamp ASC
+                LIMIT ?
+            """, (limit,))
+
+        return [
+            {
+                'timestamp': row['timestamp'],
+                'cash': Decimal(row['cash']),
+                'equity': Decimal(row['equity']),
+                'unrealized_pnl': Decimal(row['unrealized_pnl']),
+                'num_positions': row['num_positions'],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def get_trades_by_strategy(
+        self,
+        strategy_name: Optional[str] = None,
+        since: Optional[datetime] = None,
+    ) -> list:
+        """Get trades with full columns for per-strategy reporting."""
+        cursor = self.conn.cursor()
+        query = """
+            SELECT id, pair, direction, entry_price, exit_price, quantity,
+                   entry_time, exit_time, pnl, pnl_pct, strategy_name, exit_reason
+            FROM trades
+            WHERE 1=1
+        """
+        params: list = []
+        if strategy_name:
+            query += " AND strategy_name = ?"
+            params.append(strategy_name)
+        if since:
+            query += " AND exit_time >= ?"
+            params.append(since.isoformat())
+        query += " ORDER BY exit_time DESC"
+
+        cursor.execute(query, params)
+        return [
+            {
+                'id': row['id'],
+                'pair': row['pair'],
+                'direction': row['direction'],
+                'entry_price': Decimal(row['entry_price']),
+                'exit_price': Decimal(row['exit_price']),
+                'quantity': Decimal(row['quantity']),
+                'entry_time': row['entry_time'],
+                'exit_time': row['exit_time'],
+                'pnl': Decimal(row['pnl']),
+                'pnl_pct': Decimal(row['pnl_pct']),
+                'strategy_name': row['strategy_name'],
+                'exit_reason': row['exit_reason'],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    # --- Backtest persistence ---
+    def insert_backtest_run(
+        self,
+        run_id: str,
+        timestamp: datetime,
+        strategies: str,
+        pairs: str,
+        start_date: str,
+        end_date: str,
+        initial_balance: str,
+        final_equity: str,
+        metrics_json: str,
+        params_json: str,
+    ) -> None:
+        """Persist a backtest run."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO backtest_runs (
+                id, timestamp, strategies, pairs, start_date, end_date,
+                initial_balance, final_equity, metrics_json, params_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id, timestamp.isoformat(), strategies, pairs,
+            start_date, end_date, initial_balance, final_equity,
+            metrics_json, params_json,
+        ))
+        self.conn.commit()
+
+    def insert_backtest_trades(self, run_id: str, trades: List[Dict]) -> None:
+        """Bulk insert backtest trades."""
+        cursor = self.conn.cursor()
+        cursor.executemany("""
+            INSERT INTO backtest_trades (
+                run_id, pair, strategy, direction, entry_time, exit_time,
+                entry_price, exit_price, quantity, pnl, fees, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            (
+                run_id, t['pair'], t['strategy'], t['direction'],
+                str(t['entry_time']), str(t['exit_time']),
+                str(t['entry_price']), str(t['exit_price']),
+                str(t['quantity']), str(t['pnl']),
+                str(t.get('fees', 0)), t.get('reason', ''),
+            )
+            for t in trades
+        ])
+        self.conn.commit()
+
+    def insert_backtest_equity_curve(self, run_id: str, curve: List[Dict]) -> None:
+        """Bulk insert backtest equity curve."""
+        cursor = self.conn.cursor()
+        cursor.executemany("""
+            INSERT INTO backtest_equity_curve (run_id, timestamp, equity)
+            VALUES (?, ?, ?)
+        """, [(run_id, str(p['timestamp']), str(p['equity'])) for p in curve])
+        self.conn.commit()
+
+    def get_backtest_runs(self, limit: int = 20) -> list:
+        """Get recent backtest runs."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, timestamp, strategies, pairs, start_date, end_date,
+                   initial_balance, final_equity, metrics_json, params_json
+            FROM backtest_runs
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (limit,))
+        return [
+            {
+                'id': row['id'],
+                'timestamp': row['timestamp'],
+                'strategies': row['strategies'],
+                'pairs': row['pairs'],
+                'start_date': row['start_date'],
+                'end_date': row['end_date'],
+                'initial_balance': row['initial_balance'],
+                'final_equity': row['final_equity'],
+                'metrics': json.loads(row['metrics_json']),
+                'params': json.loads(row['params_json']),
+            }
+            for row in cursor.fetchall()
+        ]
+
+    # --- Regime logging ---
+    def insert_regime_log(self, timestamp: datetime, pair: str, regime) -> None:
+        """Log market regime detection."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO regime_logs (timestamp, pair, status, support, resistance, bandwidth_pct, touches)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            timestamp.isoformat(), pair, regime.status,
+            str(regime.support), str(regime.resistance),
+            str(regime.bandwidth_pct), regime.touches,
+        ))
+        self.conn.commit()
+
+    # --- Reconciliation logging ---
+    def insert_reconciliation_log(self, action: str, pair: str, details: str = "") -> None:
+        """Log a reconciliation action."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO reconciliation_logs (timestamp, action, pair, details)
+            VALUES (?, ?, ?, ?)
+        """, (datetime.now(timezone.utc).isoformat(), action, pair, details))
+        self.conn.commit()
 
     def close(self):
         """Close database connection."""
