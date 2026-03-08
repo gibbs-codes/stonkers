@@ -115,8 +115,9 @@ class EmaRsiStrategy(Strategy):
 
         # LONG signal: Price < EMA AND RSI crosses above oversold
         if current_price < ema and previous_rsi <= self.rsi_oversold < current_rsi and distance_pct <= self.proximity_pct:
-            # Closer to EMA = stronger signal (more likely to revert)
-            strength = max(self.min_signal_strength, Decimal(str(1.0 - min(distance_pct, 0.4))))
+            # FURTHER from EMA = stronger mean reversion signal (bigger dislocation to revert)
+            # Scale distance_pct (0-6%) to strength (0.6-1.0)
+            strength = max(self.min_signal_strength, Decimal(str(min(1.0, 0.6 + distance_pct * 6))))
             stop_price = None
             if atr_stop is not None:
                 stop_price = Decimal(str(max(0.0, float(current_price) - atr_stop)))
@@ -143,7 +144,8 @@ class EmaRsiStrategy(Strategy):
 
         # SHORT signal: Price > EMA AND RSI crosses below overbought
         if current_price > ema and previous_rsi >= self.rsi_overbought > current_rsi and distance_pct <= self.proximity_pct:
-            strength = max(self.min_signal_strength, Decimal(str(1.0 - min(distance_pct, 0.4))))
+            # FURTHER from EMA = stronger mean reversion signal
+            strength = max(self.min_signal_strength, Decimal(str(min(1.0, 0.6 + distance_pct * 6))))
             stop_price = None
             if atr_stop is not None:
                 stop_price = Decimal(str(float(current_price) + atr_stop))
@@ -205,7 +207,8 @@ class EmaRsiStrategy(Strategy):
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
 
-        rs = gain / loss
+        # Guard against division by zero (can happen in strong uptrends with no down moves)
+        rs = gain / loss.replace(0, 1e-10)
         rsi = 100 - (100 / (1 + rs))
 
         return rsi

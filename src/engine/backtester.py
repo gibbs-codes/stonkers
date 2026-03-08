@@ -49,6 +49,7 @@ class Backtester:
         slippage_pct: Decimal = Decimal("0.0005"),  # 5 bps
         commission_pct: Decimal = Decimal("0.0004"),  # 4 bps each side
         max_daily_loss_pct: Decimal = Decimal("0.05"),
+        short_margin_pct: Decimal = Decimal("0.5"),  # 50% margin required for shorts
     ) -> None:
         self.strategies = strategies
         self.risk = risk_manager
@@ -56,6 +57,7 @@ class Backtester:
         self.slippage_pct = slippage_pct
         self.commission_pct = commission_pct
         self.max_daily_loss_pct = max_daily_loss_pct
+        self.short_margin_pct = short_margin_pct  # Margin requirement for shorts
 
         self.trades: List[BacktestTrade] = []
         self.equity_curve: List[Dict] = []
@@ -109,15 +111,24 @@ class Backtester:
                 start_day_equity = self._current_equity(cash, positions, last_candle)
                 trading_halted = False
 
-            # Exits first (risk)
+            # Exits first (risk) - check candle high/low for intra-candle stop triggers
             for pair, position in list(positions.items()):
                 candle = last_candle.get(pair)
                 if not candle:
                     continue
 
-                should_close, reason = self.risk.should_close_position(position, candle.close)
+                should_close, reason = self.risk.should_close_position(
+                    position, candle.close, candle_high=candle.high, candle_low=candle.low
+                )
                 if should_close:
-                    cash, closed = self._close_position(position, candle.close, cash, reason)
+                    # Use stop price for exit if stop was hit, otherwise use close
+                    exit_price = candle.close
+                    if position.stop_loss_price:
+                        if position.direction == Direction.LONG and candle.low <= position.stop_loss_price:
+                            exit_price = position.stop_loss_price  # Fill at stop price
+                        elif position.direction == Direction.SHORT and candle.high >= position.stop_loss_price:
+                            exit_price = position.stop_loss_price
+                    cash, closed = self._close_position(position, exit_price, cash, reason)
                     positions.pop(pair)
                     self.trades.append(closed)
 
@@ -139,8 +150,14 @@ class Backtester:
                     if pair in positions:
                         continue
 
-                    history = candles[: idx[pair]]  # up to current bar (inclusive)
-                    if not history:
+                    # LOOKAHEAD FIX: Strategy analyzes data BEFORE current bar (excludes current)
+                    # This simulates reality: you can only decide based on completed bars
+                    history = candles[: max(0, idx[pair] - 1)]  # Exclude current bar
+                    if len(history) < 2:  # Need at least some history
+                        continue
+
+                    current_bar = last_candle.get(pair)
+                    if not current_bar:
                         continue
 
                     for strategy in self.strategies:
@@ -156,15 +173,25 @@ class Backtester:
                         if not can_open:
                             continue
 
-                        fill_price = self._apply_slippage(history[-1].close, signal)
+                        # LOOKAHEAD FIX: Fill at current bar's OPEN, not close
+                        # In reality, you'd enter at the start of the next bar after signal
+                        fill_price = self._apply_slippage(current_bar.open, signal)
                         qty = self.risk.calculate_position_size(Decimal(equity), fill_price)
 
                         # Cash check
                         entry_notional = fill_price * qty
                         fee_entry = entry_notional * self.commission_pct
 
-                        if signal.is_long and cash < entry_notional + fee_entry:
-                            continue  # insufficient funds for long
+                        # For longs: need full notional + fees
+                        # For shorts: need margin (e.g., 50% of notional) + fees
+                        if signal.is_long:
+                            required_cash = entry_notional + fee_entry
+                        else:
+                            # Shorts require margin, not full notional
+                            required_cash = (entry_notional * self.short_margin_pct) + fee_entry
+
+                        if cash < required_cash:
+                            continue  # insufficient funds
 
                         position_id = f"pos_{uuid.uuid4().hex[:8]}"
                         entry_time = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
@@ -185,7 +212,8 @@ class Backtester:
                         if signal.is_long:
                             cash -= entry_notional + fee_entry
                         else:
-                            cash += entry_notional - fee_entry  # short: receive proceeds now
+                            # Short: reserve margin + pay fees (don't credit proceeds until close)
+                            cash -= (entry_notional * self.short_margin_pct) + fee_entry
 
                         positions[pair] = position
                         break  # one strategy per pair per bar
@@ -231,16 +259,36 @@ class Backtester:
             out.append(c)
         return sorted(out, key=lambda c: c.timestamp)
 
-    def _apply_slippage(self, price: Decimal, signal: Signal | Position) -> Decimal:
-        # Long entries/exits pay worse price, shorts get slightly better on entry but worse on buy-back
+    def _apply_slippage(self, price: Decimal, signal: Signal | Position, is_exit: bool = False) -> Decimal:
+        """Apply slippage to price - always gives WORSE fill price.
+
+        Entry slippage:
+          - Long entry (buying): pay MORE → price * (1 + slip)
+          - Short entry (selling): receive LESS → price * (1 - slip)
+
+        Exit slippage (opposite direction):
+          - Long exit (selling): receive LESS → price * (1 - slip)
+          - Short exit (buying back): pay MORE → price * (1 + slip)
+        """
         if isinstance(signal, Signal):
             is_long = signal.is_long
         else:
             is_long = signal.direction == Direction.LONG
 
-        if is_long:
+        # Determine if we're BUYING (pay more) or SELLING (receive less)
+        if is_exit:
+            # Exiting: longs sell, shorts buy
+            is_buying = not is_long
+        else:
+            # Entering: longs buy, shorts sell
+            is_buying = is_long
+
+        if is_buying:
+            # Buying: slippage means paying more
             return price * (Decimal("1") + self.slippage_pct)
-        return price * (Decimal("1") - self.slippage_pct)
+        else:
+            # Selling: slippage means receiving less
+            return price * (Decimal("1") - self.slippage_pct)
 
     def _close_position(
         self,
@@ -249,7 +297,7 @@ class Backtester:
         cash: Decimal,
         reason: str,
     ) -> tuple[Decimal, BacktestTrade]:
-        fill_price = self._apply_slippage(market_price, position)
+        fill_price = self._apply_slippage(market_price, position, is_exit=True)
         notional_exit = fill_price * position.quantity
         fee_exit = notional_exit * self.commission_pct
         fee_entry = position.entry_price * position.quantity * self.commission_pct
@@ -259,8 +307,14 @@ class Backtester:
             cash += notional_exit - fee_exit
             pnl = (fill_price - position.entry_price) * position.quantity - total_fees
         else:
-            cash -= notional_exit + fee_exit  # buy back borrowed asset
+            # Short close: return margin + P&L
+            # Margin reserved = entry_notional * margin_pct
+            # P&L = (entry - exit) * qty (positive if price dropped)
+            entry_notional = position.entry_price * position.quantity
+            margin_reserved = entry_notional * self.short_margin_pct
             pnl = (position.entry_price - fill_price) * position.quantity - total_fees
+            # Return margin + net P&L (P&L can be negative)
+            cash += margin_reserved + pnl
 
         closed = BacktestTrade(
             pair=position.pair,

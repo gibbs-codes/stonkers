@@ -1,9 +1,13 @@
 """Position manager - single source of truth for positions."""
+import logging
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from src.data.database import Database
 from src.models.position import Position, PositionStatus
+
+logger = logging.getLogger(__name__)
 
 
 class PositionManager:
@@ -29,6 +33,68 @@ class PositionManager:
         """Load open positions from database into memory cache."""
         positions = self.db.get_open_positions()
         self._cache = {p.pair: p for p in positions}
+
+        # Validate loaded positions
+        if self._cache:
+            stale, warnings = self.validate_positions()
+            if stale:
+                logger.warning(
+                    f"Found {len(stale)} potentially stale positions on startup. "
+                    f"Consider verifying with exchange API."
+                )
+            for warning in warnings:
+                logger.warning(warning)
+
+    def validate_positions(
+        self,
+        max_age_hours: int = 24,
+    ) -> Tuple[List[Position], List[str]]:
+        """Validate loaded positions for potential issues.
+
+        Checks:
+        - Position age (might be stale from previous crash)
+        - Data integrity
+
+        Args:
+            max_age_hours: Positions older than this trigger a warning
+
+        Returns:
+            Tuple of (stale_positions, warning_messages)
+        """
+        stale_positions = []
+        warnings = []
+        now = datetime.now(timezone.utc)
+
+        for pair, position in self._cache.items():
+            # Check for stale positions
+            position_age = now - position.entry_time
+            if position_age > timedelta(hours=max_age_hours):
+                stale_positions.append(position)
+                warnings.append(
+                    f"Position {pair} is {position_age.total_seconds() / 3600:.1f} hours old. "
+                    f"Entry: {position.entry_time}, may need manual verification."
+                )
+
+            # Check for data integrity
+            if position.entry_price <= 0:
+                warnings.append(f"Position {pair} has invalid entry price: {position.entry_price}")
+
+            if position.quantity <= 0:
+                warnings.append(f"Position {pair} has invalid quantity: {position.quantity}")
+
+        return stale_positions, warnings
+
+    def get_stale_positions(self, max_age_hours: int = 24) -> List[Position]:
+        """Get positions that may be stale (old entries from previous session).
+
+        Args:
+            max_age_hours: Consider positions older than this as stale
+
+        Returns:
+            List of potentially stale positions
+        """
+        stale, _ = self.validate_positions(max_age_hours)
+        return stale
 
     def has_position(self, pair: str) -> bool:
         """Check if pair has an open position.

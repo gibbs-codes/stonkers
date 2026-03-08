@@ -1,4 +1,5 @@
 """Alpaca connector for fetching market data and executing trades."""
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional
@@ -9,8 +10,21 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
+from alpaca.common.exceptions import APIError
 
 from src.models.candle import Candle
+
+logger = logging.getLogger(__name__)
+
+
+class AlpacaConnectionError(Exception):
+    """Raised when Alpaca API connection fails."""
+    pass
+
+
+class AlpacaOrderError(Exception):
+    """Raised when order placement fails."""
+    pass
 
 
 class AlpacaConnector:
@@ -23,13 +37,27 @@ class AlpacaConnector:
             api_key: Alpaca API key
             secret_key: Alpaca secret key
             paper: Whether to use paper trading (default True)
+
+        Raises:
+            ValueError: If API keys are empty
+            AlpacaConnectionError: If connection test fails
         """
+        if not api_key or not secret_key:
+            raise ValueError("Alpaca API key and secret key are required")
+
         self.data_client = CryptoHistoricalDataClient(api_key, secret_key)
         self.trading_client = TradingClient(api_key, secret_key, paper=paper)
         self.paper = paper
 
         # Keep backwards compatibility
         self.client = self.data_client
+
+        # Test connection on init
+        try:
+            self.trading_client.get_account()
+            logger.info(f"Alpaca connector initialized (paper={paper})")
+        except APIError as e:
+            raise AlpacaConnectionError(f"Failed to connect to Alpaca: {e}")
 
     def fetch_recent_candles(
         self,
@@ -156,21 +184,30 @@ class AlpacaConnector:
             order = self.trading_client.submit_order(order_request)
             return order
 
+        except APIError as e:
+            logger.error(f"Alpaca API error placing order for {symbol}: {e}")
+            raise AlpacaOrderError(f"Failed to place order: {e}")
         except Exception as e:
-            print(f"Error placing order: {e}")
-            return None
+            logger.exception(f"Unexpected error placing order for {symbol}: {e}")
+            raise AlpacaOrderError(f"Unexpected error placing order: {e}")
 
     def get_open_positions(self) -> List:
         """Get all open positions.
 
         Returns:
             List of position objects
+
+        Raises:
+            AlpacaConnectionError: If API call fails
         """
         try:
             return self.trading_client.get_all_positions()
+        except APIError as e:
+            logger.error(f"Alpaca API error getting positions: {e}")
+            raise AlpacaConnectionError(f"Failed to get positions: {e}")
         except Exception as e:
-            print(f"Error getting positions: {e}")
-            return []
+            logger.exception(f"Unexpected error getting positions: {e}")
+            raise AlpacaConnectionError(f"Unexpected error getting positions: {e}")
 
     def close_position(self, symbol: str) -> bool:
         """Close a position.
@@ -179,11 +216,18 @@ class AlpacaConnector:
             symbol: Trading symbol (e.g., "ETHUSD")
 
         Returns:
-            True if successful, False otherwise
+            True if successful
+
+        Raises:
+            AlpacaOrderError: If position close fails
         """
         try:
             self.trading_client.close_position(symbol.replace("/", ""))
+            logger.info(f"Successfully closed position for {symbol}")
             return True
+        except APIError as e:
+            logger.error(f"Alpaca API error closing position {symbol}: {e}")
+            raise AlpacaOrderError(f"Failed to close position: {e}")
         except Exception as e:
-            print(f"Error closing position: {e}")
-            return False
+            logger.exception(f"Unexpected error closing position {symbol}: {e}")
+            raise AlpacaOrderError(f"Unexpected error closing position: {e}")

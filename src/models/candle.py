@@ -1,7 +1,11 @@
 """Candle data model with validation."""
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import List, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -67,3 +71,47 @@ class Candle:
             close=Decimal(str(bar.close)),
             volume=Decimal(str(bar.volume))
         )
+
+    @staticmethod
+    def validate_continuity(
+        candles: List["Candle"],
+        expected_interval_minutes: int = 15,
+        max_allowed_gaps: int = 2,
+    ) -> Tuple[bool, List[Tuple[datetime, datetime]]]:
+        """Validate that candles are continuous without gaps.
+
+        Args:
+            candles: List of candles to validate (should be sorted by timestamp)
+            expected_interval_minutes: Expected time between candles (default 15)
+            max_allowed_gaps: Maximum number of gaps to tolerate (default 2)
+
+        Returns:
+            Tuple of (is_valid, list of gap tuples [(gap_start, gap_end), ...])
+        """
+        if len(candles) < 2:
+            return True, []
+
+        expected_delta = timedelta(minutes=expected_interval_minutes)
+        # Allow some tolerance (e.g., 10% of interval)
+        tolerance = timedelta(minutes=expected_interval_minutes * 0.1)
+
+        gaps = []
+        for i in range(1, len(candles)):
+            actual_delta = candles[i].timestamp - candles[i - 1].timestamp
+
+            # Check if gap is larger than expected (with tolerance)
+            if actual_delta > expected_delta + tolerance:
+                gaps.append((candles[i - 1].timestamp, candles[i].timestamp))
+                logger.warning(
+                    f"Candle gap detected: {candles[i-1].timestamp} -> {candles[i].timestamp} "
+                    f"(expected {expected_delta}, got {actual_delta})"
+                )
+
+        is_valid = len(gaps) <= max_allowed_gaps
+        if not is_valid:
+            logger.error(
+                f"Too many candle gaps ({len(gaps)} > {max_allowed_gaps}). "
+                f"Data may be corrupt or incomplete."
+            )
+
+        return is_valid, gaps

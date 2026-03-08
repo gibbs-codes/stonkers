@@ -1,7 +1,7 @@
 """Main trading engine - orchestrates the trading loop."""
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from decimal import Decimal
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from rich.console import Console
 from rich.table import Table
@@ -25,6 +25,7 @@ class TradingEngine:
         strategies: List[Strategy],
         risk_manager: RiskManager,
         trader: Union[PaperTrader, "LiveTrader"],
+        max_daily_loss_pct: Decimal = Decimal("0.05"),
     ):
         """Initialize trading engine.
 
@@ -33,12 +34,19 @@ class TradingEngine:
             strategies: List of strategies to execute
             risk_manager: Risk manager instance
             trader: Paper or live trader instance
+            max_daily_loss_pct: Maximum daily loss before halting trading (default 5%)
         """
         self.db = db
         self.strategies = strategies
         self.risk_manager = risk_manager
         self.trader = trader
         self.position_manager = PositionManager(db)
+        self.max_daily_loss_pct = max_daily_loss_pct
+
+        # Daily loss tracking
+        self._current_day: Optional[date] = None
+        self._start_day_equity: Decimal = trader.get_account_value()
+        self._trading_halted: bool = False
 
         # Keep backwards compatibility
         self.paper_trader = trader
@@ -46,30 +54,73 @@ class TradingEngine:
         console.print("\n[bold green]Trading Engine Initialized[/bold green]")
         console.print(f"Strategies: {', '.join(s.name for s in strategies)}")
         console.print(f"Starting Balance: ${trader.get_account_value()}")
+        console.print(f"Max Daily Loss: {self.max_daily_loss_pct:.1%}")
         console.print()
 
     def process_candles(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Process new candles for all pairs.
 
         This is the main loop that:
-        1. Checks if existing positions should close
-        2. Runs strategies to find new entry signals
-        3. Opens new positions if signals pass risk checks
+        1. Checks daily loss limit and resets on new day
+        2. Checks if existing positions should close
+        3. Runs strategies to find new entry signals (if not halted)
+        4. Opens new positions if signals pass risk checks
 
         Args:
             candles_by_pair: Dict mapping pair -> list of recent candles
         """
-        # Step 1: Check existing positions for exits
+        # Step 0: Check for new day and daily loss limit
+        self._check_daily_loss_limit()
+
+        # Step 1: Check existing positions for exits (always check, even if halted)
         self._check_position_exits(candles_by_pair)
 
-        # Step 2: Look for new entry signals
-        self._check_entry_signals(candles_by_pair)
+        # Step 2: Look for new entry signals (skip if daily loss limit hit)
+        if not self._trading_halted:
+            self._check_entry_signals(candles_by_pair)
+        else:
+            console.print("[bold red]⚠ Trading halted - daily loss limit reached[/bold red]")
 
         # Step 3: Update account equity with unrealized P&L
         self._update_equity(candles_by_pair)
 
-        # Step 4: Display status
+        # Step 4: Re-check daily loss after equity update
+        self._check_daily_loss_limit()
+
+        # Step 5: Display status
         self._display_status()
+
+    def _check_daily_loss_limit(self) -> None:
+        """Check if daily loss limit has been reached and reset on new day."""
+        today = datetime.now(timezone.utc).date()
+
+        # New day - reset tracking
+        if self._current_day != today:
+            self._current_day = today
+            self._start_day_equity = self.paper_trader.get_account_value()
+            self._trading_halted = False
+            console.print(f"[dim]New trading day: {today}, start equity: ${self._start_day_equity:.2f}[/dim]")
+            return
+
+        # Check if we've exceeded daily loss limit
+        if self._trading_halted:
+            return  # Already halted
+
+        current_equity = self.paper_trader.get_account_value()
+        if self._start_day_equity > 0:
+            daily_loss_pct = (self._start_day_equity - current_equity) / self._start_day_equity
+
+            if daily_loss_pct >= self.max_daily_loss_pct:
+                self._trading_halted = True
+                console.print(
+                    f"[bold red]🛑 DAILY LOSS LIMIT HIT: {daily_loss_pct:.2%} "
+                    f"(limit: {self.max_daily_loss_pct:.2%})[/bold red]"
+                )
+                console.print(
+                    f"[red]Started: ${self._start_day_equity:.2f} → "
+                    f"Current: ${current_equity:.2f} "
+                    f"(loss: ${self._start_day_equity - current_equity:.2f})[/red]"
+                )
 
     def _check_position_exits(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Check if any open positions should be closed.
@@ -85,8 +136,11 @@ class TradingEngine:
             if not candles:
                 continue
 
-            # Get current price from latest candle
-            current_price = candles[-1].close
+            # Get current candle data for intra-candle stop checks
+            current_candle = candles[-1]
+            current_price = current_candle.close
+            candle_high = current_candle.high
+            candle_low = current_candle.low
 
             # Check RSI-based exit for EMA_RSI strategy positions
             should_close = False
@@ -99,7 +153,8 @@ class TradingEngine:
                 delta = df['close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
+                # Guard against division by zero
+                rs = gain / loss.replace(0, 1e-10)
                 rsi = 100 - (100 / (1 + rs))
                 current_rsi = rsi.iloc[-1]
 
@@ -109,27 +164,36 @@ class TradingEngine:
                     reason = f"RSI neutral zone exit (RSI: {current_rsi:.1f})"
 
             # If not RSI exit, check risk manager rules (stop loss / take profit)
+            # Pass candle high/low for proper intra-candle stop checks
             if not should_close:
                 should_close, reason = self.risk_manager.should_close_position(
-                    position, current_price
+                    position, current_price, candle_high=candle_high, candle_low=candle_low
                 )
 
             if should_close:
-                # Execute exit
-                self.paper_trader.execute_exit(position, current_price)
+                # Execute exit - check return value to ensure it succeeded
+                try:
+                    exit_result = self.paper_trader.execute_exit(position, current_price)
+                    if exit_result is None:
+                        console.print(f"[red]Exit execution failed for {pair} - position NOT closed[/red]")
+                        continue
 
-                # Close position in manager
-                closed = self.position_manager.close_position(
-                    pair, current_price, reason
-                )
+                    # Close position in manager only after successful exit execution
+                    closed = self.position_manager.close_position(
+                        pair, current_price, reason
+                    )
 
-                # Log the close
-                pnl = closed.realized_pnl()
-                console.print(
-                    f"[yellow]CLOSED {pair} {position.direction.value}:[/yellow] "
-                    f"Entry ${position.entry_price}, Exit ${current_price}, "
-                    f"P&L: ${pnl:+.2f} ({reason})"
-                )
+                    # Log the close
+                    pnl = closed.realized_pnl()
+                    console.print(
+                        f"[yellow]CLOSED {pair} {position.direction.value}:[/yellow] "
+                        f"Entry ${position.entry_price}, Exit ${current_price}, "
+                        f"P&L: ${pnl:+.2f} ({reason})"
+                    )
+                except Exception as e:
+                    console.print(f"[red]Error executing exit for {pair}: {e}[/red]")
+                    # Don't close position in manager if exit failed
+                    continue
 
     def _check_entry_signals(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Check strategies for new entry signals.

@@ -82,11 +82,27 @@ class Config:
 
         # Parse exchange config
         exchange_data = data.get("exchange", {})
+
+        # Validate API keys - raise error if missing
+        api_key = os.getenv("ALPACA_API_KEY")
+        secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+        if not api_key:
+            raise ValueError(
+                "ALPACA_API_KEY environment variable is missing. "
+                "Set it in your .env file or environment."
+            )
+        if not secret_key:
+            raise ValueError(
+                "ALPACA_SECRET_KEY environment variable is missing. "
+                "Set it in your .env file or environment."
+            )
+
         exchange = ExchangeConfig(
             name=exchange_data.get("name", "alpaca"),
             paper=exchange_data.get("paper", True),
-            api_key=os.getenv("ALPACA_API_KEY", ""),
-            secret_key=os.getenv("ALPACA_SECRET_KEY", ""),
+            api_key=api_key,
+            secret_key=secret_key,
         )
 
         # Parse trading config

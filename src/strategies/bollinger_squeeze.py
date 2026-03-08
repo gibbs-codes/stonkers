@@ -176,12 +176,13 @@ class BollingerSqueezeStrategy(Strategy):
             window = max(self.retest_lookback, 2)
             recent_df = df.iloc[-window-1:]  # include prior candle for breakout
 
-            # Find latest breakout candle within window
+            # Find latest breakout candle within window (excluding current candle)
+            # Fix: iterate through all candles except the last one (current), checking for breakouts
             breakout_long_idx = None
             breakout_short_idx = None
-            for idx in range(len(recent_df)-1):
+            for idx in range(1, len(recent_df) - 1):  # Start at 1 to have a valid prev_row
                 row = recent_df.iloc[idx]
-                prev_row = recent_df.iloc[idx-1] if idx > 0 else row
+                prev_row = recent_df.iloc[idx - 1]
                 if (row['close'] > row['upper_band'] and prev_row['close'] <= prev_row['upper_band'] and row['is_squeeze']):
                     breakout_long_idx = idx
                 if (row['close'] < row['lower_band'] and prev_row['close'] >= prev_row['lower_band'] and row['is_squeeze']):

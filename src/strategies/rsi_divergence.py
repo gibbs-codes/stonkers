@@ -242,7 +242,8 @@ class RsiDivergenceStrategy(Strategy):
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
 
-        rs = gain / loss
+        # Guard against division by zero (can happen in strong uptrends with no down moves)
+        rs = gain / loss.replace(0, 1e-10)
         rsi = 100 - (100 / (1 + rs))
 
         return rsi

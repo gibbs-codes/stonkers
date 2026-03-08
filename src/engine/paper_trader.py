@@ -15,15 +15,22 @@ class PaperTrader:
     No real money involved - just updates database with simulated trades.
     """
 
-    def __init__(self, db: Database, initial_balance: Decimal = Decimal("10000")):
+    def __init__(
+        self,
+        db: Database,
+        initial_balance: Decimal = Decimal("10000"),
+        slippage_pct: Decimal = Decimal("0.001"),  # 0.1% default slippage
+    ):
         """Initialize paper trader.
 
         Args:
             db: Database instance
             initial_balance: Starting cash balance
+            slippage_pct: Slippage percentage to apply to fills
         """
         self.db = db
         self.initial_balance = initial_balance
+        self.slippage_pct = slippage_pct
         self._initialize_account()
 
     def _initialize_account(self) -> None:
@@ -35,6 +42,30 @@ class PaperTrader:
                 cash=self.initial_balance,
                 equity=self.initial_balance,
             )
+
+    def _apply_slippage(self, price: Decimal, is_long: bool, is_exit: bool = False) -> Decimal:
+        """Apply realistic slippage to fill price.
+
+        Args:
+            price: Base price before slippage
+            is_long: Whether the position is long
+            is_exit: Whether this is an exit (vs entry)
+
+        Returns:
+            Adjusted price with slippage (always worse for the trader)
+        """
+        # Determine if we're buying or selling
+        if is_exit:
+            is_buying = not is_long  # Long exit = sell, Short exit = buy
+        else:
+            is_buying = is_long  # Long entry = buy, Short entry = sell
+
+        if is_buying:
+            # Buying: pay more
+            return price * (Decimal("1") + self.slippage_pct)
+        else:
+            # Selling: receive less
+            return price * (Decimal("1") - self.slippage_pct)
 
     def get_account_value(self) -> Decimal:
         """Get current account equity.
@@ -92,7 +123,7 @@ class PaperTrader:
 
         Args:
             signal: Trading signal
-            entry_price: Price to enter at
+            entry_price: Base price to enter at (slippage will be applied)
             quantity: Quantity to trade
 
         Returns:
@@ -101,17 +132,22 @@ class PaperTrader:
         # Determine direction from signal type
         if signal.signal_type == SignalType.ENTRY_LONG:
             direction = Direction.LONG
+            is_long = True
         elif signal.signal_type == SignalType.ENTRY_SHORT:
             direction = Direction.SHORT
+            is_long = False
         else:
             raise ValueError(f"Invalid signal type for entry: {signal.signal_type}")
 
-        # Create position
+        # Apply slippage to get realistic fill price
+        actual_entry_price = self._apply_slippage(entry_price, is_long=is_long, is_exit=False)
+
+        # Create position with slippage-adjusted price
         position = Position(
             id=f"pos_{uuid.uuid4().hex[:8]}",
             pair=signal.pair,
             direction=direction,
-            entry_price=entry_price,
+            entry_price=actual_entry_price,
             quantity=quantity,
             entry_time=datetime.now(timezone.utc),  # Actual trade time, not signal time!
             strategy_name=signal.strategy_name,
@@ -121,8 +157,8 @@ class PaperTrader:
             signal_id=None,
         )
 
-        # Update cash (deduct position value)
-        position_value = entry_price * quantity
+        # Update cash (deduct position value with slippage-adjusted price)
+        position_value = actual_entry_price * quantity
         cash = self.get_cash_balance()
         new_cash = cash - position_value
 
@@ -131,15 +167,18 @@ class PaperTrader:
                 f"Insufficient cash: have ${cash}, need ${position_value}"
             )
 
-        self.db.save_account_state(cash=new_cash, equity=self.get_account_value())
+        # Fix: Calculate new equity correctly after position entry
+        # Equity = new cash (after deduction) - we haven't gained or lost yet
+        new_equity = new_cash  # At entry, equity = cash since unrealized P&L is 0
+        self.db.save_account_state(cash=new_cash, equity=new_equity)
 
-        # Log acceptance with actual/expected fills
+        # Log acceptance with actual/expected fills (includes slippage info)
         position.signal_id = self.log_signal(
             signal=signal,
             status="accepted",
             rejection_reason=None,
-            expected_entry_price=expected_entry_price,
-            actual_entry_price=entry_price,
+            expected_entry_price=expected_entry_price if expected_entry_price else entry_price,
+            actual_entry_price=actual_entry_price,  # Price after slippage
             quantity=quantity,
             position_id=position.id,
         )
@@ -155,22 +194,25 @@ class PaperTrader:
 
         Args:
             position: Position to close
-            exit_price: Price to exit at
+            exit_price: Base price to exit at (slippage will be applied)
 
         Returns:
             Closed position with P&L calculated
         """
-        # Calculate P&L
-        pnl = position.unrealized_pnl(exit_price)
+        # Apply slippage to exit price
+        is_long = position.direction == Direction.LONG
+        actual_exit_price = self._apply_slippage(exit_price, is_long=is_long, is_exit=True)
+
+        # Calculate P&L with slippage-adjusted exit price
+        pnl = position.unrealized_pnl(actual_exit_price)
 
         # Update cash: add back original position value + P&L
         cash = self.get_cash_balance()
         original_value = position.entry_price * position.quantity
         new_cash = cash + original_value + pnl
 
-        # Update equity
-        equity = self.get_account_value()
-        new_equity = equity + pnl
+        # Equity after close = cash (no open positions from this trade)
+        new_equity = new_cash
 
         self.db.save_account_state(cash=new_cash, equity=new_equity)
 
@@ -181,10 +223,10 @@ class PaperTrader:
             if position.signal_id:
                 self.db.update_signal_log_exit(
                     position_id=position.id,
-                    actual_exit_price=float(exit_price),
+                    actual_exit_price=float(actual_exit_price),  # Price after slippage
                     pnl_actual=pnl_actual,
                     pnl_expected=pnl_expected,
-                    expected_exit_price=None,
+                    expected_exit_price=float(exit_price),  # Original price before slippage
                 )
         except Exception:
             pass  # logging should never break trading

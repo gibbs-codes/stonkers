@@ -19,6 +19,8 @@ class RiskManager:
         max_position_size_pct: Decimal = Decimal("0.2"),  # 20% per position
         stop_loss_pct: Decimal = Decimal("0.02"),  # 2% stop loss
         take_profit_pct: Decimal = Decimal("0.05"),  # 5% take profit
+        use_fixed_position_sizing: bool = False,  # If True, use initial equity for sizing
+        initial_equity: Optional[Decimal] = None,  # Starting equity for fixed sizing
     ):
         """Initialize risk manager.
 
@@ -27,11 +29,17 @@ class RiskManager:
             max_position_size_pct: Max % of portfolio per position (0.0 to 1.0)
             stop_loss_pct: Stop loss percentage (0.0 to 1.0)
             take_profit_pct: Take profit percentage (0.0 to 1.0)
+            use_fixed_position_sizing: If True, size positions based on initial equity
+                                       to prevent death spiral during drawdowns
+            initial_equity: Starting equity to use for fixed sizing (required if use_fixed_position_sizing=True)
         """
         self.max_positions = max_positions
         self.max_position_size_pct = max_position_size_pct
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.use_fixed_position_sizing = use_fixed_position_sizing
+        self.initial_equity = initial_equity
+        self._high_water_mark: Optional[Decimal] = initial_equity
 
     def can_open_position(
         self,
@@ -77,8 +85,27 @@ class RiskManager:
         Returns:
             Quantity to trade
         """
-        # Position value = account_value * max_position_size_pct
-        position_value = account_value * self.max_position_size_pct
+        # Update high water mark if current equity is higher
+        if self._high_water_mark is None:
+            self._high_water_mark = account_value
+        elif account_value > self._high_water_mark:
+            self._high_water_mark = account_value
+
+        # Choose sizing basis: fixed (initial/HWM) or dynamic (current equity)
+        if self.use_fixed_position_sizing and self.initial_equity is not None:
+            # Use initial equity to prevent death spiral
+            # Position sizes stay constant regardless of drawdown
+            sizing_basis = self.initial_equity
+        else:
+            # Standard dynamic sizing based on current equity
+            sizing_basis = account_value
+
+        # Position value = sizing_basis * max_position_size_pct
+        position_value = sizing_basis * self.max_position_size_pct
+
+        # Safety check: don't size larger than current account can afford
+        max_affordable = account_value * Decimal("0.95")  # Leave 5% buffer
+        position_value = min(position_value, max_affordable)
 
         # Quantity = position_value / entry_price
         quantity = position_value / entry_price
@@ -89,40 +116,66 @@ class RiskManager:
         self,
         position: Position,
         current_price: Decimal,
+        candle_high: Optional[Decimal] = None,
+        candle_low: Optional[Decimal] = None,
     ) -> tuple[bool, str]:
         """Check if position should be closed based on risk rules.
 
         Args:
             position: Open position to check
-            current_price: Current market price
+            current_price: Current market price (candle close)
+            candle_high: High of current candle (for intra-candle stop checks)
+            candle_low: Low of current candle (for intra-candle stop checks)
 
         Returns:
             Tuple of (should_close: bool, reason: str)
         """
+        # Use candle extremes for stop loss checks (catches intra-candle stop hits)
+        # For longs: stop loss triggered if price went DOWN to stop (use candle low)
+        # For shorts: stop loss triggered if price went UP to stop (use candle high)
+        stop_check_price_long = candle_low if candle_low is not None else current_price
+        stop_check_price_short = candle_high if candle_high is not None else current_price
+
         # Strategy-specific stop/take precedence when provided
         if position.stop_loss_price:
-            if position.direction == Direction.LONG and current_price <= position.stop_loss_price:
-                return True, f"Per-signal stop loss hit ({current_price} <= {position.stop_loss_price})"
-            if position.direction == Direction.SHORT and current_price >= position.stop_loss_price:
-                return True, f"Per-signal stop loss hit ({current_price} >= {position.stop_loss_price})"
+            if position.direction == Direction.LONG and stop_check_price_long <= position.stop_loss_price:
+                return True, f"Per-signal stop loss hit (low {stop_check_price_long} <= {position.stop_loss_price})"
+            if position.direction == Direction.SHORT and stop_check_price_short >= position.stop_loss_price:
+                return True, f"Per-signal stop loss hit (high {stop_check_price_short} >= {position.stop_loss_price})"
 
         if position.take_profit_price:
-            if position.direction == Direction.LONG and current_price >= position.take_profit_price:
-                return True, f"Per-signal take profit hit ({current_price} >= {position.take_profit_price})"
-            if position.direction == Direction.SHORT and current_price <= position.take_profit_price:
-                return True, f"Per-signal take profit hit ({current_price} <= {position.take_profit_price})"
+            # For take profit, use the favorable extreme:
+            # Longs profit when price goes UP (use candle high)
+            # Shorts profit when price goes DOWN (use candle low)
+            tp_check_price_long = candle_high if candle_high is not None else current_price
+            tp_check_price_short = candle_low if candle_low is not None else current_price
 
-        # Calculate P&L percentage
-        pnl = position.unrealized_pnl(current_price)
-        pnl_pct = pnl / (position.entry_price * position.quantity)
+            if position.direction == Direction.LONG and tp_check_price_long >= position.take_profit_price:
+                return True, f"Per-signal take profit hit (high {tp_check_price_long} >= {position.take_profit_price})"
+            if position.direction == Direction.SHORT and tp_check_price_short <= position.take_profit_price:
+                return True, f"Per-signal take profit hit (low {tp_check_price_short} <= {position.take_profit_price})"
 
-        # Stop loss check
-        if pnl_pct <= -self.stop_loss_pct:
-            return True, f"Stop loss hit ({pnl_pct:.2%})"
+        # Calculate P&L percentage using worst-case price for stops
+        if position.direction == Direction.LONG:
+            worst_price = stop_check_price_long
+            best_price = candle_high if candle_high is not None else current_price
+        else:
+            worst_price = stop_check_price_short
+            best_price = candle_low if candle_low is not None else current_price
 
-        # Take profit check
-        if pnl_pct >= self.take_profit_pct:
-            return True, f"Take profit hit ({pnl_pct:.2%})"
+        # Check stop loss using worst intra-candle price
+        pnl_worst = position.unrealized_pnl(worst_price)
+        pnl_pct_worst = pnl_worst / (position.entry_price * position.quantity)
+
+        if pnl_pct_worst <= -self.stop_loss_pct:
+            return True, f"Stop loss hit ({pnl_pct_worst:.2%} at {worst_price})"
+
+        # Check take profit using best intra-candle price
+        pnl_best = position.unrealized_pnl(best_price)
+        pnl_pct_best = pnl_best / (position.entry_price * position.quantity)
+
+        if pnl_pct_best >= self.take_profit_pct:
+            return True, f"Take profit hit ({pnl_pct_best:.2%} at {best_price})"
 
         return False, "No exit conditions met"
 
