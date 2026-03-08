@@ -2,11 +2,12 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from rich.console import Console
 from rich.table import Table
 
+from src.analysis.range_detector import RangeDetector
 from src.data.database import Database
 from src.engine.paper_trader import PaperTrader
 from src.engine.position_manager import PositionManager
@@ -26,6 +27,8 @@ class BacktestEngine:
         risk_manager: RiskManager,
         initial_balance: Decimal = Decimal("10000"),
         mtf_context=None,
+        slippage_pct: float = 0.0,
+        commission_pct: float = 0.0,
     ):
         """Initialize backtest engine.
 
@@ -33,20 +36,27 @@ class BacktestEngine:
             strategies: List of strategies to test
             risk_manager: Risk manager instance
             initial_balance: Starting balance for backtest
+            mtf_context: Optional multi-timeframe context
+            slippage_pct: Simulated slippage as fraction (e.g. 0.0005 = 0.05%)
+            commission_pct: Commission as fraction (e.g. 0.001 = 0.1%)
         """
         self.strategies = strategies
         self.risk_manager = risk_manager
         self.initial_balance = initial_balance
         self.mtf_context = mtf_context
+        self.slippage_pct = Decimal(str(slippage_pct))
+        self.commission_pct = Decimal(str(commission_pct))
 
         # Create temporary database for backtest
         self.db = Database(Path(":memory:"))  # In-memory SQLite
         self.paper_trader = PaperTrader(self.db, initial_balance)
         self.position_manager = PositionManager(self.db)
+        self.range_detector = RangeDetector()
 
         # Track metrics
         self.trades: List[Dict] = []
         self.equity_curve: List[Dict] = []
+        self._regime_cache: Dict[str, object] = {}
 
     def run(
         self,
@@ -67,7 +77,12 @@ class BacktestEngine:
         console.print(f"\n[bold cyan]Running Backtest[/bold cyan]")
         console.print(f"Period: {start_date.date()} to {end_date.date()}")
         console.print(f"Strategies: {', '.join(s.name for s in self.strategies)}")
-        console.print(f"Starting Balance: ${self.initial_balance}\n")
+        console.print(f"Starting Balance: ${self.initial_balance}")
+        if self.slippage_pct > 0:
+            console.print(f"Slippage: {float(self.slippage_pct)*100:.3f}%")
+        if self.commission_pct > 0:
+            console.print(f"Commission: {float(self.commission_pct)*100:.3f}%")
+        console.print()
 
         # Filter candles to date range
         filtered_candles = self._filter_by_date(candles_by_pair, start_date, end_date)
@@ -126,12 +141,31 @@ class BacktestEngine:
             ]
         return filtered
 
+    def _apply_slippage(self, price: Decimal, is_buy: bool) -> Decimal:
+        """Apply slippage to a fill price."""
+        if self.slippage_pct == 0:
+            return price
+        if is_buy:
+            return price * (Decimal("1") + self.slippage_pct)
+        else:
+            return price * (Decimal("1") - self.slippage_pct)
+
+    def _apply_commission(self, value: Decimal) -> Decimal:
+        """Calculate commission for a trade value."""
+        return value * self.commission_pct
+
     def _process_timestamp(
         self,
         candles_by_pair: Dict[str, List[Candle]],
         timestamp: datetime,
     ) -> None:
         """Process a single timestamp (check exits and entries)."""
+        # Step 0: Update market regimes
+        for pair, candles in candles_by_pair.items():
+            if candles and len(candles) >= 20:
+                regime = self.range_detector.detect(candles)
+                self._regime_cache[pair] = regime
+
         # Step 1: Check position exits
         for pair, position in list(self.position_manager.get_all_open().items()):
             if pair not in candles_by_pair or not candles_by_pair[pair]:
@@ -139,16 +173,45 @@ class BacktestEngine:
 
             current_price = candles_by_pair[pair][-1].close
 
-            # Check if should close
-            should_close, reason = self.risk_manager.should_close_position(
-                position, current_price
-            )
+            # Update trailing stop high-water mark
+            self.risk_manager.update_high_water_mark(position, current_price)
+
+            should_close = False
+            reason = ""
+
+            # 1. Check strategy-specific exit
+            strategy = self._find_strategy(position.strategy_name)
+            if strategy:
+                exit_signal = strategy.should_exit(
+                    position, candles_by_pair[pair], current_price
+                )
+                if exit_signal and exit_signal.should_exit:
+                    should_close = True
+                    reason = exit_signal.reason
+
+            # 2. If no strategy exit, check risk manager (SL/TP/trailing)
+            if not should_close:
+                should_close, reason = self.risk_manager.should_close_position(
+                    position, current_price
+                )
 
             if should_close:
-                self.paper_trader.execute_exit(position, current_price)
+                # Apply slippage to exit
+                is_buy = position.direction.value == "short"  # buy to close short
+                exit_price = self._apply_slippage(current_price, is_buy)
+
+                self.paper_trader.execute_exit(position, exit_price)
                 closed = self.position_manager.close_position(
-                    pair, current_price, reason
+                    pair, exit_price, reason
                 )
+
+                self.risk_manager.clear_position_state(position.id)
+
+                pnl = float(closed.realized_pnl())
+                # Deduct commission from P&L
+                if self.commission_pct > 0:
+                    trade_value = float(position.entry_price * position.quantity)
+                    pnl -= float(self._apply_commission(Decimal(str(trade_value)))) * 2  # entry + exit
 
                 # Record trade
                 self.trades.append({
@@ -158,9 +221,9 @@ class BacktestEngine:
                     'entry_time': position.entry_time,
                     'exit_time': closed.exit_time,
                     'entry_price': float(position.entry_price),
-                    'exit_price': float(current_price),
+                    'exit_price': float(exit_price),
                     'quantity': float(position.quantity),
-                    'pnl': float(closed.realized_pnl()),
+                    'pnl': pnl,
                     'reason': reason,
                 })
 
@@ -171,18 +234,15 @@ class BacktestEngine:
 
             # Run all strategies
             for strategy in self.strategies:
+                # Set current regime context on strategy
+                strategy.regime = self._regime_cache.get(pair)
+
                 signal = strategy.analyze(candles)
 
                 if not signal:
                     continue
 
-                # Higher timeframe alignment filter
-                if not strategy.check_mtf_alignment(
-                    signal, timestamp, self.mtf_context, getattr(strategy, "mtf_timeframe", "4h")
-                ):
-                    continue
-
-                # Check MTF alignment
+                # Higher timeframe alignment filter (single check, not duplicate)
                 if not strategy.check_mtf_alignment(
                     signal, timestamp, self.mtf_context, getattr(strategy, "mtf_timeframe", "4h")
                 ):
@@ -212,20 +272,29 @@ class BacktestEngine:
                         )
                     continue
 
-                # Open position
+                # Open position with slippage
                 account_value = self.paper_trader.get_account_value()
-                entry_price = candles[-1].close
+                raw_price = candles[-1].close
+                is_buy = signal.signal_type.value in ("entry_long",)
+                entry_price = self._apply_slippage(raw_price, is_buy)
                 quantity = self.risk_manager.calculate_position_size(
                     account_value, entry_price
                 )
 
                 position = self.paper_trader.execute_entry(
-                    signal, entry_price, quantity, expected_entry_price=entry_price
+                    signal, entry_price, quantity, expected_entry_price=raw_price
                 )
                 self.position_manager.open_position(position)
 
                 # Only take first signal per pair
                 break
+
+    def _find_strategy(self, strategy_name: str) -> Optional[Strategy]:
+        """Find a strategy by name."""
+        for s in self.strategies:
+            if s.name == strategy_name:
+                return s
+        return None
 
     def _close_all_positions(self, candles_by_pair: Dict[str, List[Candle]]) -> None:
         """Close all open positions at end of backtest."""

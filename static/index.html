@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stonkers Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="Stonkers Trading Dashboard - Real-time trading data">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/static/icon-192.svg">
+    <link rel="apple-touch-icon" href="/static/icon-192.svg">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 { color: #00d4ff; margin-bottom: 20px; }
+        h2 { color: #888; font-size: 14px; text-transform: uppercase; margin: 20px 0 10px; }
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333; }
+        .stat:last-child { border-bottom: none; }
+        .stat-label { color: #888; }
+        .stat-value { font-weight: bold; }
+        .positive { color: #00ff88; }
+        .negative { color: #ff4757; }
+        .neutral { color: #ffa502; }
+        .position {
+            background: #1e3a5f;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+        .position-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .position-pair { font-weight: bold; font-size: 16px; }
+        .long { color: #00ff88; }
+        .short { color: #ff4757; }
+        .strategy-list { display: flex; flex-wrap: wrap; gap: 8px; }
+        .strategy-tag {
+            background: #2d4a6f;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .strategy-tag.enabled { background: #1e5128; }
+        .strategy-tag.disabled { background: #4a1e1e; opacity: 0.6; }
+        .timestamp { color: #666; font-size: 12px; text-align: center; margin-top: 20px; }
+        .no-data { color: #666; font-style: italic; }
+
+        /* PWA status bar */
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #00ff88;
+        }
+        .status-dot.offline { background: #ff4757; }
+        .offline-banner {
+            background: #4a1e1e;
+            color: #ff4757;
+            text-align: center;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            display: none;
+        }
+        .offline-banner.visible { display: block; }
+        .install-btn {
+            background: #00d4ff;
+            color: #1a1a2e;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: none;
+        }
+        .install-btn:hover { background: #00b8d9; }
+        .install-btn.visible { display: inline-block; }
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Position detail rows */
+        .position-details { font-size: 13px; }
+        .position-details .stat { padding: 5px 0; }
+        .position-pnl { font-size: 18px; font-weight: bold; }
+        .position-risk {
+            display: flex;
+            gap: 12px;
+            margin-top: 6px;
+            font-size: 12px;
+        }
+        .position-risk span { color: #888; }
+        .position-risk .sl { color: #ff4757; }
+        .position-risk .tp { color: #00ff88; }
+        .position-source {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: #2d4a6f;
+            color: #888;
+        }
+        .position-source.external { background: #4a3a1e; color: #ffa502; }
+
+        /* Close button */
+        .close-btn {
+            background: #ff4757;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .close-btn:hover { background: #e8414f; }
+        .close-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .close-btn.confirming { background: #ff1a2e; animation: pulse 1s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        /* Signal activity feed */
+        .signal-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid #222;
+            font-size: 13px;
+        }
+        .signal-item:last-child { border-bottom: none; }
+        .signal-left { display: flex; align-items: center; gap: 8px; }
+        .signal-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .signal-status.accepted { background: #00ff88; }
+        .signal-status.rejected { background: #ff4757; }
+        .signal-pair { font-weight: bold; }
+        .signal-strategy { color: #888; font-size: 11px; }
+        .signal-right { text-align: right; }
+        .signal-type { font-size: 11px; color: #888; }
+        .signal-strength { font-size: 11px; }
+        .signal-reason { font-size: 11px; color: #ff4757; }
+        .signal-time { font-size: 10px; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="header-row">
+        <h1>Stonkers Dashboard</h1>
+        <button class="install-btn" id="installBtn" onclick="installApp()">Install App</button>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Online</span>
+        </div>
+    </div>
+
+    <div class="offline-banner" id="offlineBanner">
+        Offline - Last updated: <span id="offlineTime">unknown</span>
+    </div>
+
+    <div id="dashboardContent">
+        <div class="loading">Loading dashboard data...</div>
+    </div>
+
+    <p class="timestamp" id="timestampFooter"></p>
+
+    <script>
+    // --- State ---
+    let deferredPrompt = null;
+    let refreshTimer = null;
+    let closeConfirmState = {}; // symbol -> timeout for double-click confirm
+    const REFRESH_INTERVAL = 60000; // 60 seconds
+
+    // --- PWA Install Prompt ---
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        document.getElementById('installBtn').classList.add('visible');
+    });
+
+    function installApp() {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choice) => {
+            if (choice.outcome === 'accepted') {
+                document.getElementById('installBtn').classList.remove('visible');
+            }
+            deferredPrompt = null;
+        });
+    }
+
+    window.addEventListener('appinstalled', () => {
+        document.getElementById('installBtn').classList.remove('visible');
+        deferredPrompt = null;
+    });
+
+    // --- Online/Offline Status ---
+    function updateOnlineStatus() {
+        const isOnline = navigator.onLine;
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        const banner = document.getElementById('offlineBanner');
+
+        if (isOnline) {
+            dot.classList.remove('offline');
+            text.textContent = 'Online';
+            banner.classList.remove('visible');
+            startAutoRefresh();
+        } else {
+            dot.classList.add('offline');
+            text.textContent = 'Offline';
+            banner.classList.add('visible');
+            stopAutoRefresh();
+        }
+    }
+
+    window.addEventListener('online', () => {
+        updateOnlineStatus();
+        fetchDashboardData(); // Refresh immediately on reconnect
+    });
+    window.addEventListener('offline', updateOnlineStatus);
+
+    // --- Auto Refresh ---
+    function startAutoRefresh() {
+        stopAutoRefresh();
+        refreshTimer = setInterval(() => {
+            if (navigator.onLine) {
+                fetchDashboardData();
+            }
+        }, REFRESH_INTERVAL);
+    }
+
+    function stopAutoRefresh() {
+        if (refreshTimer) {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+        }
+    }
+
+    // --- Data Fetching & Rendering ---
+    function formatNumber(val, decimals) {
+        return Number(val).toFixed(decimals);
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function formatTimestamp(ts) {
+        if (!ts) return '';
+        // Parse ISO timestamp and show relative or short form
+        try {
+            const d = new Date(ts);
+            const now = new Date();
+            const diffMs = now - d;
+            const diffMin = Math.floor(diffMs / 60000);
+            if (diffMin < 1) return 'just now';
+            if (diffMin < 60) return diffMin + 'm ago';
+            const diffHr = Math.floor(diffMin / 60);
+            if (diffHr < 24) return diffHr + 'h ago';
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        } catch {
+            return ts;
+        }
+    }
+
+    async function fetchDashboardData() {
+        try {
+            const resp = await fetch('/api/dashboard');
+            const data = await resp.json();
+            renderDashboard(data);
+
+            // Update offline banner timestamp
+            const ts = data.timestamp || new Date().toISOString();
+            document.getElementById('offlineTime').textContent = ts;
+
+            // Update footer
+            document.getElementById('timestampFooter').textContent =
+                'Last updated: ' + ts + ' (auto-refreshes every 60s)';
+        } catch (err) {
+            // If we got cached data from service worker, it will still work
+            // Only show error if we truly have no data
+            const content = document.getElementById('dashboardContent');
+            if (content.querySelector('.loading')) {
+                content.innerHTML = '<div class="card"><p class="no-data">Unable to load data. Waiting for connection...</p></div>';
+            }
+        }
+    }
+
+    // --- Emergency Close ---
+    function closePosition(symbol) {
+        // Double-click confirmation pattern
+        if (closeConfirmState[symbol]) {
+            // Second click - actually close
+            clearTimeout(closeConfirmState[symbol]);
+            delete closeConfirmState[symbol];
+            doClosePosition(symbol);
+        } else {
+            // First click - enter confirm state
+            closeConfirmState[symbol] = setTimeout(() => {
+                delete closeConfirmState[symbol];
+                // Reset button text
+                const btn = document.querySelector('[data-symbol="' + symbol + '"]');
+                if (btn) {
+                    btn.textContent = 'Close';
+                    btn.classList.remove('confirming');
+                }
+            }, 3000);
+
+            // Update button to confirm state
+            const btn = document.querySelector('[data-symbol="' + symbol + '"]');
+            if (btn) {
+                btn.textContent = 'Confirm Close';
+                btn.classList.add('confirming');
+            }
+        }
+    }
+
+    async function doClosePosition(symbol) {
+        const btn = document.querySelector('[data-symbol="' + symbol + '"]');
+        if (btn) {
+            btn.textContent = 'Closing...';
+            btn.disabled = true;
+        }
+
+        try {
+            const resp = await fetch('/api/positions/close', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol: symbol }),
+            });
+            const data = await resp.json();
+            if (data.success) {
+                // Refresh dashboard after close
+                setTimeout(fetchDashboardData, 1000);
+            } else {
+                alert('Failed to close: ' + (data.error || 'Unknown error'));
+                if (btn) {
+                    btn.textContent = 'Close';
+                    btn.disabled = false;
+                }
+            }
+        } catch (err) {
+            alert('Error closing position: ' + err.message);
+            if (btn) {
+                btn.textContent = 'Close';
+                btn.disabled = false;
+            }
+        }
+    }
+
+    // --- Rendering ---
+    function renderDashboard(data) {
+        const cash = formatNumber(data.cash || 0, 2);
+        const equity = formatNumber(data.equity || 0, 2);
+        const paperMode = data.paper_mode !== false;
+        const positions = data.positions || [];
+        const trades = data.trades || [];
+        const strategies = data.strategies || [];
+        const signals = data.signals || [];
+        const cachedAt = data._cachedAt;
+
+        let html = '';
+
+        // Account section
+        html += '<h2>Account</h2>';
+        html += '<div class="card">';
+        html += '<div class="stat"><span class="stat-label">Cash Balance</span><span class="stat-value">$' + cash + '</span></div>';
+        html += '<div class="stat"><span class="stat-label">Total Equity</span><span class="stat-value">$' + equity + '</span></div>';
+        html += '<div class="stat"><span class="stat-label">Mode</span>';
+        html += '<span class="stat-value ' + (paperMode ? 'neutral' : 'negative') + '">';
+        html += paperMode ? 'Paper Trading' : 'LIVE TRADING';
+        html += '</span></div>';
+        html += '</div>';
+
+        // Positions section
+        html += '<h2>Open Positions (' + positions.length + ')</h2>';
+        html += '<div class="card">';
+        if (positions.length > 0) {
+            positions.forEach(function(pos) {
+                const dirClass = (pos.direction === 'long' || pos.direction === 'LONG') ? 'long' : 'short';
+                const hasPnl = pos.unrealized_pnl !== null && pos.unrealized_pnl !== undefined;
+                const pnl = hasPnl ? Number(pos.unrealized_pnl) : null;
+                const pnlPct = pos.unrealized_pnl_pct !== null ? Number(pos.unrealized_pnl_pct) : null;
+                const pnlClass = pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : '';
+                const isExternal = pos.strategy === 'external';
+
+                html += '<div class="position">';
+
+                // Header: pair, direction, source tag, close button
+                html += '<div class="position-header">';
+                html += '<span>';
+                html += '<span class="position-pair">' + escapeHtml(pos.pair) + '</span> ';
+                html += '<span class="' + dirClass + '">' + escapeHtml((pos.direction || '').toUpperCase()) + '</span> ';
+                if (isExternal) {
+                    html += '<span class="position-source external">external</span>';
+                }
+                html += '</span>';
+
+                // Close button (only in live mode)
+                if (!paperMode) {
+                    html += '<button class="close-btn" data-symbol="' + escapeHtml(pos.symbol || pos.pair.replace('/', '')) + '" onclick="closePosition(\'' + escapeHtml(pos.symbol || pos.pair.replace('/', '')) + '\')">Close</button>';
+                }
+                html += '</div>';
+
+                // P&L highlight (if available from Alpaca)
+                if (hasPnl) {
+                    html += '<div class="stat">';
+                    html += '<span class="stat-label">Unrealized P&L</span>';
+                    html += '<span class="position-pnl ' + pnlClass + '">';
+                    html += (pnl >= 0 ? '+' : '') + '$' + formatNumber(pnl, 2);
+                    if (pnlPct !== null) {
+                        html += ' (' + (pnlPct >= 0 ? '+' : '') + formatNumber(pnlPct, 2) + '%)';
+                    }
+                    html += '</span></div>';
+                }
+
+                // Details
+                html += '<div class="position-details">';
+                html += '<div class="stat"><span class="stat-label">Entry Price</span><span class="stat-value">$' + formatNumber(pos.entry_price, 2) + '</span></div>';
+
+                if (pos.current_price) {
+                    html += '<div class="stat"><span class="stat-label">Current Price</span><span class="stat-value">$' + formatNumber(pos.current_price, 2) + '</span></div>';
+                }
+
+                html += '<div class="stat"><span class="stat-label">Quantity</span><span class="stat-value">' + formatNumber(pos.quantity, 6) + '</span></div>';
+
+                if (pos.market_value) {
+                    html += '<div class="stat"><span class="stat-label">Market Value</span><span class="stat-value">$' + formatNumber(pos.market_value, 2) + '</span></div>';
+                }
+
+                html += '<div class="stat"><span class="stat-label">Strategy</span><span class="stat-value">' + escapeHtml(pos.strategy) + '</span></div>';
+
+                if (pos.entry_time) {
+                    html += '<div class="stat"><span class="stat-label">Opened</span><span class="stat-value">' + escapeHtml(pos.entry_time) + '</span></div>';
+                }
+
+                // Risk levels
+                if (pos.stop_loss || pos.take_profit) {
+                    html += '<div class="position-risk">';
+                    if (pos.stop_loss) {
+                        html += '<span>SL: <span class="sl">$' + formatNumber(pos.stop_loss, 2) + '</span></span>';
+                    }
+                    if (pos.take_profit) {
+                        html += '<span>TP: <span class="tp">$' + formatNumber(pos.take_profit, 2) + '</span></span>';
+                    }
+                    html += '</div>';
+                }
+
+                html += '</div>'; // position-details
+                html += '</div>'; // position
+            });
+        } else {
+            html += '<p class="no-data">No open positions</p>';
+        }
+        html += '</div>';
+
+        // Trades section
+        html += '<h2>Recent Trades (' + trades.length + ')</h2>';
+        html += '<div class="card">';
+        if (trades.length > 0) {
+            trades.forEach(function(trade) {
+                const pnl = Number(trade.pnl);
+                const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+                html += '<div class="stat">';
+                html += '<span class="stat-label">' + escapeHtml(trade.pair) + ' ' + escapeHtml(trade.direction.toUpperCase()) + '</span>';
+                html += '<span class="stat-value ' + pnlClass + '">$' + formatNumber(trade.pnl, 2) + ' (' + formatNumber(trade.pnl_pct, 1) + '%)</span>';
+                html += '</div>';
+            });
+        } else {
+            html += '<p class="no-data">No recent trades</p>';
+        }
+        html += '</div>';
+
+        // Signal Activity Feed
+        html += '<h2>Signal Activity (' + signals.length + ')</h2>';
+        html += '<div class="card">';
+        if (signals.length > 0) {
+            signals.forEach(function(sig) {
+                const isAccepted = sig.status === 'accepted';
+                html += '<div class="signal-item">';
+                html += '<div class="signal-left">';
+                html += '<div class="signal-status ' + (isAccepted ? 'accepted' : 'rejected') + '"></div>';
+                html += '<div>';
+                html += '<span class="signal-pair">' + escapeHtml(sig.pair) + '</span> ';
+                html += '<span class="signal-strategy">' + escapeHtml(sig.strategy) + '</span>';
+                if (!isAccepted && sig.rejection_reason) {
+                    html += '<br><span class="signal-reason">' + escapeHtml(sig.rejection_reason) + '</span>';
+                }
+                html += '</div></div>';
+                html += '<div class="signal-right">';
+                html += '<div class="signal-type">' + escapeHtml(sig.signal_type || '') + '</div>';
+                if (sig.strength !== null && sig.strength !== undefined) {
+                    const strengthPct = (Number(sig.strength) * 100).toFixed(0);
+                    html += '<div class="signal-strength">' + strengthPct + '% str</div>';
+                }
+                if (sig.entry_price) {
+                    html += '<div class="signal-type">@ $' + formatNumber(sig.entry_price, 2) + '</div>';
+                }
+                html += '<div class="signal-time">' + formatTimestamp(sig.timestamp) + '</div>';
+                html += '</div>';
+                html += '</div>';
+            });
+        } else {
+            html += '<p class="no-data">No signal activity yet</p>';
+        }
+        html += '</div>';
+
+        // Strategies section
+        html += '<h2>Strategies</h2>';
+        html += '<div class="card"><div class="strategy-list">';
+        strategies.forEach(function(strat) {
+            const tagClass = strat.enabled ? 'enabled' : 'disabled';
+            html += '<span class="strategy-tag ' + tagClass + '">' + escapeHtml(strat.name) + '</span>';
+        });
+        html += '</div></div>';
+
+        // Show cached data notice if applicable
+        if (cachedAt && !navigator.onLine) {
+            html += '<div class="offline-banner visible" style="display:block">Showing cached data from: ' + escapeHtml(cachedAt) + '</div>';
+        }
+
+        document.getElementById('dashboardContent').innerHTML = html;
+    }
+
+    // --- Service Worker Registration ---
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+            .then(function(reg) {
+                console.log('Service worker registered, scope:', reg.scope);
+            })
+            .catch(function(err) {
+                console.log('Service worker registration failed:', err);
+            });
+    }
+
+    // --- Init ---
+    updateOnlineStatus();
+    fetchDashboardData();
+    startAutoRefresh();
+    </script>
+</body>
+</html>

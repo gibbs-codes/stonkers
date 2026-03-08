@@ -14,7 +14,8 @@ from typing import List, Optional
 import pandas as pd
 
 from src.models.candle import Candle
-from src.models.signal import Signal, SignalType
+from src.models.position import Direction
+from src.models.signal import ExitSignal, Signal, SignalType
 from src.strategies.base import Strategy
 
 
@@ -53,6 +54,10 @@ class VwapMeanReversionStrategy(Strategy):
         Returns:
             Signal if mean reversion setup detected with volume confirmation, None otherwise
         """
+        # Skip if market is trending (mean reversion underperforms)
+        if self.regime and self.regime.status == "trending":
+            return None
+
         # Need vwap_period + 20 for volume average + buffer
         min_required = self.vwap_period + 20
         if not self._validate_candles(candles, min_required):
@@ -175,6 +180,84 @@ class VwapMeanReversionStrategy(Strategy):
             )
 
         return None
+
+    def should_exit(self, position, candles: List[Candle], current_price) -> Optional[ExitSignal]:
+        """Exit when price returns to VWAP (mean reversion target hit)."""
+        min_required = self.vwap_period + 20
+        if len(candles) < min_required:
+            return None
+
+        df = self._candles_to_df(candles)
+        df['vwap'] = self._calculate_vwap(df)
+        current_vwap = df['vwap'].iloc[-1]
+
+        if pd.isna(current_vwap):
+            return None
+
+        price = float(current_price)
+        vwap = float(current_vwap)
+
+        # Long: exit if price reaches or crosses above VWAP
+        if position.direction == Direction.LONG and price >= vwap:
+            return ExitSignal(
+                should_exit=True,
+                reason=f"Price returned to VWAP ({price:.2f} >= {vwap:.2f})",
+            )
+
+        # Short: exit if price reaches or crosses below VWAP
+        if position.direction == Direction.SHORT and price <= vwap:
+            return ExitSignal(
+                should_exit=True,
+                reason=f"Price returned to VWAP ({price:.2f} <= {vwap:.2f})",
+            )
+
+        return None
+
+    def diagnostics(self, candles: List[Candle]) -> dict:
+        """Return current indicator values and condition statuses for debugging."""
+        min_required = self.vwap_period + 20
+        if not candles or len(candles) < min_required:
+            return {"status": f"need {min_required} candles, have {len(candles) if candles else 0}"}
+
+        df = self._candles_to_df(candles)
+        df['vwap'] = self._calculate_vwap(df)
+        df['distance_from_vwap'] = df['close'] - df['vwap']
+        df['std_dev'] = df['distance_from_vwap'].rolling(window=self.vwap_period).std()
+        df['upper_band'] = df['vwap'] + (self.std_multiplier * df['std_dev'])
+        df['lower_band'] = df['vwap'] - (self.std_multiplier * df['std_dev'])
+        df['avg_volume'] = df['volume'].rolling(window=20).mean()
+
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        price = current['close']
+        vwap = current['vwap']
+        std = current['std_dev']
+        upper = current['upper_band']
+        lower = current['lower_band']
+        vol = current['volume']
+        avg_vol = current['avg_volume']
+
+        if pd.isna(vwap) or pd.isna(std) or pd.isna(avg_vol) or avg_vol == 0:
+            return {"status": "insufficient data for VWAP calculation"}
+
+        distance_in_std = abs(price - vwap) / std if std > 0 else 0
+        stretched = distance_in_std >= (self.std_multiplier * self.stretch_factor)
+        vol_confirmed = vol > (avg_vol * self.volume_threshold)
+        crossed_lower = previous['close'] >= previous['lower_band'] and price < lower
+        crossed_upper = previous['close'] <= previous['upper_band'] and price > upper
+
+        return {
+            "price": f"${price:.2f}",
+            "vwap": f"${vwap:.2f}",
+            "upper_band": f"${upper:.2f}",
+            "lower_band": f"${lower:.2f}",
+            "distance": f"{distance_in_std:.2f}σ (need >={self.std_multiplier * self.stretch_factor:.2f}σ)",
+            "stretched": f"{'PASS' if stretched else 'FAIL'}",
+            "volume": f"{vol:.0f} vs avg {avg_vol:.0f} ({vol/avg_vol:.1f}x, need >{self.volume_threshold}x)",
+            "vol_confirmed": f"{'PASS' if vol_confirmed else 'FAIL'}",
+            "crossed_lower": f"{'PASS' if crossed_lower else 'FAIL'}",
+            "crossed_upper": f"{'PASS' if crossed_upper else 'FAIL'}",
+        }
 
     def _calculate_vwap(self, df: pd.DataFrame) -> pd.Series:
         """Calculate VWAP using typical price over rolling window.

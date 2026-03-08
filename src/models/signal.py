@@ -60,3 +60,10 @@ class Signal:
     def is_short(self) -> bool:
         """Check if signal is for SHORT entry."""
         return self.signal_type == SignalType.ENTRY_SHORT
+
+
+@dataclass(frozen=True)
+class ExitSignal:
+    """Signal from a strategy to close a position."""
+    should_exit: bool
+    reason: str

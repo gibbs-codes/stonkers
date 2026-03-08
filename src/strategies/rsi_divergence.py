@@ -229,6 +229,35 @@ class RsiDivergenceStrategy(Strategy):
 
         return None
 
+    def diagnostics(self, candles: List[Candle]) -> dict:
+        """Return current indicator values and condition statuses for debugging."""
+        min_required = self.rsi_period + self.lookback + 5
+        if not candles or len(candles) < min_required:
+            return {"status": f"need {min_required} candles, have {len(candles) if candles else 0}"}
+
+        df = self._candles_to_df(candles)
+        df['rsi'] = self._calculate_rsi(df['close'], self.rsi_period)
+        recent_df = df.iloc[-self.lookback:]
+
+        price = recent_df['close'].iloc[-1]
+        rsi = recent_df['rsi'].iloc[-1]
+        price_highs, price_lows = self._find_local_extremes(recent_df['close'])
+        rsi_highs, rsi_lows = self._find_local_extremes(recent_df['rsi'])
+
+        bullish = self._check_bullish_divergence(recent_df, price_lows, rsi_lows)
+        bearish = self._check_bearish_divergence(recent_df, price_highs, rsi_highs)
+
+        return {
+            "price": f"${price:.2f}",
+            "rsi": f"{rsi:.1f}",
+            "price_lows": f"{len(price_lows)} found (need >=2)",
+            "price_highs": f"{len(price_highs)} found (need >=2)",
+            "rsi_lows": f"{len(rsi_lows)} found (need >=2)",
+            "rsi_highs": f"{len(rsi_highs)} found (need >=2)",
+            "bullish_div": f"{'DETECTED' if bullish else 'none'} (price lower-low + RSI higher-low)",
+            "bearish_div": f"{'DETECTED' if bearish else 'none'} (price higher-high + RSI lower-high)",
+        }
+
     def _candles_to_df(self, candles: List[Candle]) -> pd.DataFrame:
         """Convert candles to pandas DataFrame."""
         return pd.DataFrame([
