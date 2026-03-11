@@ -111,9 +111,17 @@ class Database:
                 pnl_actual REAL,
                 slippage REAL,
                 position_id TEXT,
-                notes TEXT
+                notes TEXT,
+                context_json TEXT
             )
         """)
+
+        # Backwards-compat: add context_json if signal_logs table already existed
+        try:
+            cursor.execute("ALTER TABLE signal_logs ADD COLUMN context_json TEXT")
+        except sqlite3.OperationalError:
+            # Column likely exists already
+            pass
 
         # Account state (single row for cash/equity tracking)
         cursor.execute("""
@@ -226,6 +234,27 @@ class Database:
                 details TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
+        """)
+
+        # Bot events (for observer pipeline)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL DEFAULT 'INFO',
+                message TEXT,
+                context_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bot_events_timestamp
+            ON bot_events(timestamp)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bot_events_event_type
+            ON bot_events(event_type)
         """)
 
         self.conn.commit()
@@ -431,6 +460,7 @@ class Database:
         quantity: float | None = None,
         slippage: float | None = None,
         position_id: str | None = None,
+        context_json: str | None = None,
     ) -> int:
         cursor = self.conn.cursor()
         cursor.execute(
@@ -438,8 +468,8 @@ class Database:
             INSERT INTO signal_logs (
                 timestamp, pair, strategy_name, signal_type, strength, status,
                 rejection_reason, expected_entry_price, actual_entry_price,
-                quantity, slippage, position_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                quantity, slippage, position_id, context_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp.isoformat(),
@@ -454,6 +484,7 @@ class Database:
                 quantity,
                 slippage,
                 position_id,
+                context_json,
             ),
         )
         self.conn.commit()
@@ -742,6 +773,40 @@ class Database:
             VALUES (?, ?, ?, ?)
         """, (datetime.now(timezone.utc).isoformat(), action, pair, details))
         self.conn.commit()
+
+    # --- Bot event logging ---
+    def insert_bot_event(
+        self,
+        event_type: str,
+        message: str | None = None,
+        severity: str = "INFO",
+        context: dict | None = None,
+    ) -> int:
+        """Insert a bot event for observer pipeline.
+
+        Args:
+            event_type: Event type (BOT_START, BOT_STOP, EXCEPTION, API_ERROR, RISK_BLOCK, DAILY_RESET)
+            message: Optional message describing the event
+            severity: Severity level (INFO, WARNING, ERROR, CRITICAL)
+            context: Optional dict to serialize as JSON context
+
+        Returns:
+            The inserted row ID
+        """
+        cursor = self.conn.cursor()
+        context_json = json.dumps(context) if context else None
+        cursor.execute("""
+            INSERT INTO bot_events (timestamp, event_type, severity, message, context_json)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            datetime.now(timezone.utc).isoformat(),
+            event_type,
+            severity,
+            message,
+            context_json,
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
 
     def close(self):
         """Close database connection."""

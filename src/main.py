@@ -1,6 +1,7 @@
 """Main entry point for the trading bot."""
 import os
 import time
+import traceback
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -150,6 +151,18 @@ def main():
     console.print(f"Dashboard: http://localhost:{DASHBOARD_PORT}\n")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
+    # Log bot start event
+    db.insert_bot_event(
+        event_type="BOT_START",
+        message="Trading bot started",
+        severity="INFO",
+        context={
+            "pairs": PAIRS,
+            "strategies": [s.name for s in strategies],
+            "paper_mode": config.paper_trading.enabled,
+        },
+    )
+
     # Main loop
     last_candles = {}  # Cache last successful candles
     iteration = 0
@@ -271,8 +284,29 @@ def main():
 
     except KeyboardInterrupt:
         console.print("\n[bold yellow]Shutting down...[/bold yellow]")
+        db.insert_bot_event(
+            event_type="BOT_STOP",
+            message="Trading bot stopped by user",
+            severity="INFO",
+            context={"final_balance": str(trader.get_account_value())},
+        )
         console.print(f"Final balance: ${trader.get_account_value():.2f}")
         console.print("[bold green]Goodbye![/bold green]")
+    except Exception as e:
+        # Log unexpected exceptions
+        db.insert_bot_event(
+            event_type="EXCEPTION",
+            message=str(e),
+            severity="CRITICAL",
+            context={"traceback": traceback.format_exc()},
+        )
+        db.insert_bot_event(
+            event_type="BOT_STOP",
+            message="Trading bot stopped due to unhandled exception",
+            severity="ERROR",
+        )
+        console.print(f"\n[bold red]FATAL ERROR: {e}[/bold red]")
+        raise
 
 
 if __name__ == "__main__":
