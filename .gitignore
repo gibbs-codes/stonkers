@@ -56,3 +56,5 @@ BUILD_PLAN.md
 
 # OS
 .DS_Store
+.claude/settings.local.json
+.claude/worktrees/
