@@ -162,14 +162,41 @@ def main():
             "paper_mode": config.paper_trading.enabled,
         },
     )
+    
+    # Log heartbeat event every 5 minutes to show bot is alive
+    def log_heartbeat():
+        db.insert_bot_event(
+            event_type="BOT_HEARTBEAT",
+            message="Trading bot is running normally",
+            severity="INFO",
+            context={
+                "pairs": PAIRS,
+                "loop_iteration": iteration,
+            },
+        )
 
     # Main loop
     last_candles = {}  # Cache last successful candles
     iteration = 0
+    last_heartbeat = time.time()
     try:
         while True:
             iteration += 1
             console.print(f"[bold blue]--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---[/bold blue]")
+            
+            # Log heartbeat every 5 minutes (300 seconds)
+            current_time = time.time()
+            if current_time - last_heartbeat > 300:
+                db.insert_bot_event(
+                    event_type="BOT_HEARTBEAT",
+                    message="Trading bot is running normally",
+                    severity="INFO",
+                    context={
+                        "pairs": PAIRS,
+                        "loop_iteration": iteration,
+                    },
+                )
+                last_heartbeat = current_time
 
             # Check for config changes
             new_config = config_watcher.check_for_changes()

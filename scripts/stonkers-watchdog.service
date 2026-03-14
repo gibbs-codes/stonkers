@@ -1,0 +1,17 @@
+[Unit]
+Description=Stonkers Trading Bot Watchdog
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/deployments/stonkers
+Environment=PYTHONPATH=/home/pi/deployments/stonkers
+ExecStart=/usr/bin/python3 -m src.bot.watchdog --interval 60
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

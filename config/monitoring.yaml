@@ -1,0 +1,47 @@
+# Stonkers Trading Bot Monitoring Configuration
+
+# Health check settings
+health_check:
+  # Interval between health checks in seconds
+  interval_seconds: 30
+  
+  # Time window to consider bot start as valid (hours)
+  startup_timeout_hours: 2
+  
+  # Maximum consecutive failures before alerting
+  max_failures_before_alert: 3
+
+# Restart settings
+restart:
+  # Maximum restart attempts before giving up
+  max_attempts: 3
+  
+  # Cooldown period between restart attempts (seconds)
+  cooldown_seconds: 300
+  
+  # Whether to enable automatic restarts
+  auto_restart_enabled: true
+
+# Alert settings
+alerts:
+  # Email notifications (requires SMTP configuration)
+  email_notifications: false
+  email_recipients:
+    - admin@example.com
+  
+  # Slack webhook URL for notifications (optional)
+  slack_webhook_url: ""
+  
+  # Minimum severity level for alerts
+  min_severity: WARNING
+
+# Process monitoring
+process:
+  # Process name pattern to monitor
+  name_pattern: "python.*src\\.main"
+  
+  # CPU usage threshold for alert (%)
+  cpu_threshold_percent: 80
+  
+  # Memory usage threshold for alert (MB)
+  memory_threshold_mb: 500
